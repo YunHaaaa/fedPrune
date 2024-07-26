@@ -94,7 +94,7 @@ class PrunableNet(nn.Module):
         with torch.no_grad():
             layer_names = []
             sparsities = np.empty(len(list(self.named_children())))
-            n_weights = np.zeros_like(sparsities, dtype=np.int)
+            n_weights = np.zeros_like(sparsities, dtype=int)
 
             for i, (name, layer) in enumerate(self.named_children()):
 
