@@ -360,6 +360,7 @@ class PrunableNet(nn.Module):
 
                     mask_to_apply = apply_mask_source[mask_name].to(device=self.device, dtype=torch.bool)
                     mask_to_copy = copy_mask_source[mask_name].to(device=self.device, dtype=torch.bool)
+                    param = param.to(self.device)
                     gpu_param = param[mask_to_apply].to(self.device)
 
                     # copy weights provided by the weight source, where the mask
