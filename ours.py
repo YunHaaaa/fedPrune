@@ -215,7 +215,7 @@ class Client:
 
 
     def train(self, global_params=None, initial_global_params=None,
-              readjustment_ratio=0.5, readjust=False, sparsity=args.sparsity):
+              readjustment_ratio=0.5, readjust=False, sparsity=args.sparsity, last=None):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
@@ -260,15 +260,18 @@ class Client:
             
             self.curr_epoch += 1
 
-        # we only need to transmit the masked weights and all biases
-        if args.fp16:
-            ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
-        else:
-            ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+        if last:
+            # we only need to transmit the masked weights and all biases
+            if args.fp16:
+                ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
+            else:
+                ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+            
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
         #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
         #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        
         return ret
 
     def test(self, model=None, n_batches=0):
@@ -331,16 +334,23 @@ compute_times = np.zeros(len(clients)) # time in seconds taken on client-side fo
 download_cost = np.zeros(len(clients))
 upload_cost = np.zeros(len(clients))
 
+last_round = False
+
 # for each round t = 1, 2, ... do
 for server_round in tqdm(range(args.rounds)):
+
+    if server_round + 1 == args.rounds:
+        last_round = True
 
     # sample clients
     client_indices = rng.choice(list(clients.keys()), size=args.clients)
 
     global_params = global_model.state_dict()
+    
     aggregated_params = {}
     aggregated_params_for_mask = {}
     aggregated_masks = {}
+
     # set server parameters to 0 in preparation for aggregation,
     for name, param in global_params.items():
         if name.endswith('_mask'):
@@ -352,6 +362,7 @@ for server_round in tqdm(range(args.rounds)):
 
     # for each client k \in S_t in parallel do
     total_sampled = 0
+
     for client_id in client_indices:
         client = clients[client_id]
         i = client_ids.index(client_id)
@@ -378,7 +389,8 @@ for server_round in tqdm(range(args.rounds)):
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
                                     readjustment_ratio=readjustment_ratio,
-                                    readjust=readjust, sparsity=round_sparsity)
+                                    readjust=readjust, sparsity=round_sparsity, last=last_round)
+        
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
         upload_cost[i] = train_result['ul_cost']
