@@ -81,13 +81,15 @@ if args.final_sparsity is None:
 
 def print2(*arg, **kwargs):
     print(*arg, **kwargs, file=args.outfile)
-    print(' | '.join(f"{key}: {value}" for key, value in kwargs.items()))
 
 def dprint(*args, **kwargs):
     print(*args, **kwargs, file=sys.stderr)
 
 def print_csv_line(**kwargs):
-    print2(','.join(str(x) for x in kwargs.values()), **kwargs)
+    print2(','.join(str(x) for x in kwargs.values()))
+
+    for key, value in kwargs.items():
+        print(f"{key}: {value}")
 
 def nan_to_num(x, nan=0, posinf=0, neginf=0):
     x = x.clone()
