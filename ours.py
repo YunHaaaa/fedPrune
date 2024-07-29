@@ -253,6 +253,7 @@ class Client:
                 outputs = self.net(inputs)
                 self.criterion(outputs, labels).backward()
 
+                # TODO: change to DPF
                 self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
                 self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
                 
@@ -400,100 +401,102 @@ for server_round in tqdm(range(args.rounds)):
         client.net.clear_gradients() # to save memory
 
         # add this client's params to the aggregate
+        if last_round:
+            cl_weight_params = {}
+            cl_mask_params = {}
 
-        cl_weight_params = {}
-        cl_mask_params = {}
+            # first deduce masks for the received weights
+            for name, cl_param in cl_params.items():
+                if name.endswith('_orig'):
+                    name = name[:-5]
+                elif name.endswith('_mask'):
+                    name = name[:-5]
+                    cl_mask_params[name] = cl_param.to(device='cpu', copy=True)
+                    continue
 
-        # first deduce masks for the received weights
-        for name, cl_param in cl_params.items():
-            if name.endswith('_orig'):
-                name = name[:-5]
-            elif name.endswith('_mask'):
-                name = name[:-5]
-                cl_mask_params[name] = cl_param.to(device='cpu', copy=True)
-                continue
+                cl_weight_params[name] = cl_param.to(device='cpu', copy=True)
+                if args.fp16:
+                    cl_weight_params[name] = cl_weight_params[name].to(torch.bfloat16).to(torch.float)
 
-            cl_weight_params[name] = cl_param.to(device='cpu', copy=True)
-            if args.fp16:
-                cl_weight_params[name] = cl_weight_params[name].to(torch.bfloat16).to(torch.float)
+            # at this point, we have weights and masks (possibly all-ones)
+            # for this client. we will proceed by applying the mask and adding
+            # the masked received weights to the aggregate, and adding the mask
+            # to the aggregate as well.
+            for name, cl_param in cl_weight_params.items():
+                if name in cl_mask_params:
+                    # things like weights have masks
+                    cl_mask = cl_mask_params[name]
+                    sv_mask = global_params[name + '_mask'].to('cpu', copy=True)
 
-        # at this point, we have weights and masks (possibly all-ones)
-        # for this client. we will proceed by applying the mask and adding
-        # the masked received weights to the aggregate, and adding the mask
-        # to the aggregate as well.
-        for name, cl_param in cl_weight_params.items():
-            if name in cl_mask_params:
-                # things like weights have masks
-                cl_mask = cl_mask_params[name]
-                sv_mask = global_params[name + '_mask'].to('cpu', copy=True)
+                    # calculate Hamming distance of masks for debugging
+                    if readjust:
+                        dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
 
-                # calculate Hamming distance of masks for debugging
-                if readjust:
-                    dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
+                    aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
+                    aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
+                    aggregated_masks[name].add_(client.train_size() * cl_mask)
+                    
+                    if args.remember_old:
+                        sv_mask[cl_mask] = 0
+                        sv_param = global_params[name].to('cpu', copy=True)
 
-                aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
-                aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
-                aggregated_masks[name].add_(client.train_size() * cl_mask)
-                if args.remember_old:
-                    sv_mask[cl_mask] = 0
-                    sv_param = global_params[name].to('cpu', copy=True)
-
-                    aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
-                    aggregated_masks[name].add_(client.train_size() * sv_mask)
-            else:
-                # things like biases don't have masks
-                aggregated_params[name].add_(client.train_size() * cl_param)
+                        aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
+                        aggregated_masks[name].add_(client.train_size() * sv_mask)
+                else:
+                    # things like biases don't have masks
+                    aggregated_params[name].add_(client.train_size() * cl_param)
 
     # at this point, we have the sum of client parameters
     # in aggregated_params, and the sum of masks in aggregated_masks. We
     # can take the average now by simply dividing...
-    for name, param in aggregated_params.items():
+    if last_round:
+        for name, param in aggregated_params.items():
 
-        # if this parameter has no associated mask, simply take the average.
-        if name not in aggregated_masks:
-            aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
-            continue
+            # if this parameter has no associated mask, simply take the average.
+            if name not in aggregated_masks:
+                aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
+                continue
 
-        # drop parameters with not enough votes
-        aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
+            # drop parameters with not enough votes
+            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
 
-        # otherwise, we are taking the weighted average w.r.t. the number of 
-        # samples present on each of the clients.
-        aggregated_params[name] /= aggregated_masks[name]
-        aggregated_params_for_mask[name] /= aggregated_masks[name]
-        aggregated_masks[name] /= aggregated_masks[name]
+            # otherwise, we are taking the weighted average w.r.t. the number of 
+            # samples present on each of the clients.
+            aggregated_params[name] /= aggregated_masks[name]
+            aggregated_params_for_mask[name] /= aggregated_masks[name]
+            aggregated_masks[name] /= aggregated_masks[name]
 
-        # it's possible that some weights were pruned by all clients. In this
-        # case, we will have divided by zero. Those values have already been
-        # pruned out, so the values here are only placeholders.
-        aggregated_params[name] = torch.nan_to_num(aggregated_params[name],
-                                                   nan=0.0, posinf=0.0, neginf=0.0)
-        aggregated_params_for_mask[name] = torch.nan_to_num(aggregated_params[name],
-                                                   nan=0.0, posinf=0.0, neginf=0.0)
-        aggregated_masks[name] = torch.nan_to_num(aggregated_masks[name],
-                                                  nan=0.0, posinf=0.0, neginf=0.0)
+            # it's possible that some weights were pruned by all clients. In this
+            # case, we will have divided by zero. Those values have already been
+            # pruned out, so the values here are only placeholders.
+            aggregated_params[name] = torch.nan_to_num(aggregated_params[name],
+                                                    nan=0.0, posinf=0.0, neginf=0.0)
+            aggregated_params_for_mask[name] = torch.nan_to_num(aggregated_params[name],
+                                                    nan=0.0, posinf=0.0, neginf=0.0)
+            aggregated_masks[name] = torch.nan_to_num(aggregated_masks[name],
+                                                    nan=0.0, posinf=0.0, neginf=0.0)
 
-    # masks are parameters too!
-    for name, mask in aggregated_masks.items():
-        aggregated_params[name + '_mask'] = mask
-        aggregated_params_for_mask[name + '_mask'] = mask
+        # masks are parameters too!
+        for name, mask in aggregated_masks.items():
+            aggregated_params[name + '_mask'] = mask
+            aggregated_params_for_mask[name + '_mask'] = mask
 
-    # reset global params to aggregated values
-    global_model.load_state_dict(aggregated_params_for_mask)
+        # reset global params to aggregated values
+        global_model.load_state_dict(aggregated_params_for_mask)
 
-    if global_model.sparsity() < round_sparsity:
-        # we now have denser networks than we started with at the beginning of
-        # the round. reprune on the server to get back to the desired sparsity.
-        # we use layer-wise magnitude pruning as before.
-        global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
+        if global_model.sparsity() < round_sparsity:
+            # we now have denser networks than we started with at the beginning of
+            # the round. reprune on the server to get back to the desired sparsity.
+            # we use layer-wise magnitude pruning as before.
+            global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
 
-    # discard old weights and apply new mask
-    global_params = global_model.state_dict()
-    for name, mask in aggregated_masks.items():
-        new_mask = global_params[name + '_mask']
-        aggregated_params[name + '_mask'] = new_mask
-        aggregated_params[name][~new_mask] = 0
-    global_model.load_state_dict(aggregated_params)
+        # discard old weights and apply new mask
+        global_params = global_model.state_dict()
+        for name, mask in aggregated_masks.items():
+            new_mask = global_params[name + '_mask']
+            aggregated_params[name + '_mask'] = new_mask
+            aggregated_params[name][~new_mask] = 0
+        global_model.load_state_dict(aggregated_params)
 
     # evaluate performance
     torch.cuda.empty_cache()
@@ -519,6 +522,7 @@ for server_round in tqdm(range(args.rounds)):
                            pruning_method='',
                            lth=False,
                            client_id=client_id,
+                           # TODO: client의 accuracy가 개별로 업데이트 되고 있는지 확인 후 수정
                            accuracy=accuracies[client_id],
                            sparsity=sparsities[client_id],
                            compute_time=compute_times[i],
@@ -537,18 +541,18 @@ for server_round in tqdm(range(args.rounds)):
         download_cost[:] = 0
         upload_cost[:] = 0
 
-#print2('OVERALL SUMMARY')
-#print2()
-#print2(f'{args.total_clients} clients, {args.clients} chosen each round')
-#print2(f'E={args.epochs} local epochs per round, B={args.batch_size} mini-batch size')
-#print2(f'{args.rounds} rounds of federated learning')
-#print2(f'Target sparsity r_target={args.target_sparsity}, pruning rate (per round) r_p={args.pruning_rate}')
-#print2(f'Accuracy threshold starts at {args.pruning_threshold} and ends at {args.final_pruning_threshold}')
-#print2(f'Accuracy threshold growth method "{args.pruning_threshold_growth_method}"')
-#print2(f'Pruning method: {args.pruning_method}, resetting weights: {args.reset_weights}')
-#print2()
-#print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
-#print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
-#print2()
-#print2()
+print2('OVERALL SUMMARY')
+print2()
+print2(f'{args.total_clients} clients, {args.clients} chosen each round')
+print2(f'E={args.epochs} local epochs per round, B={args.batch_size} mini-batch size')
+print2(f'{args.rounds} rounds of federated learning')
+print2(f'Target sparsity r_target={args.target_sparsity}, pruning rate (per round) r_p={args.pruning_rate}')
+print2(f'Accuracy threshold starts at {args.pruning_threshold} and ends at {args.final_pruning_threshold}')
+print2(f'Accuracy threshold growth method "{args.pruning_threshold_growth_method}"')
+print2(f'Pruning method: {args.pruning_method}, resetting weights: {args.reset_weights}')
+print2()
+print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
+print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
+print2()
+print2()
 
