@@ -110,8 +110,6 @@ def evaluate_global(clients, global_model, progress=False, n_batches=0):
             enumerator = clients.items()
 
         for client_id, client in enumerator:
-        # 왜 global model을 evaluation 하는데 client model이 필요하지?
-        # client test 함수 보기
             accuracies[client_id] = client.test(model=global_model).item()
             sparsities[client_id] = client.sparsity()
 
