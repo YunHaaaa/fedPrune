@@ -370,16 +370,8 @@ for server_round in tqdm(range(args.rounds)):
         # Local client training.
         t0 = time.process_time()
         readjustment_ratio = args.readjustment_ratio
-        readjust = (server_round - 1) % args.rounds_between_readjustments == 0 and readjustment_ratio > 0.
-        if readjust:
-            dprint('readjusting', readjustment_ratio)
-
-        # determine sparsity desired at the end of this round
-        # ...via linear interpolation
-        if server_round <= args.rate_decay_end:
-            round_sparsity = args.sparsity * (args.rate_decay_end - server_round) / args.rate_decay_end + args.final_sparsity * server_round / args.rate_decay_end
-        else:
-            round_sparsity = args.final_sparsity
+        readjust = False
+        round_sparsity = args.final_sparsity
 
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
@@ -420,7 +412,7 @@ for server_round in tqdm(range(args.rounds)):
                 # things like weights have masks
                 cl_mask = cl_mask_params[name]
                 sv_mask = global_params[name + '_mask'].to('cpu', copy=True)
-
+                    
                 # calculate Hamming distance of masks for debugging
                 if readjust:
                     dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
@@ -475,11 +467,8 @@ for server_round in tqdm(range(args.rounds)):
     # reset global params to aggregated values
     global_model.load_state_dict(aggregated_params_for_mask)
 
-    if global_model.sparsity() < round_sparsity:
-        # we now have denser networks than we started with at the beginning of
-        # the round. reprune on the server to get back to the desired sparsity.
-        # we use layer-wise magnitude pruning as before.
-        global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
+   
+    global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
 
     # discard old weights and apply new mask
     global_params = global_model.state_dict()
@@ -541,7 +530,7 @@ for server_round in tqdm(range(args.rounds)):
 #print2(f'Accuracy threshold growth method "{args.pruning_threshold_growth_method}"')
 #print2(f'Pruning method: {args.pruning_method}, resetting weights: {args.reset_weights}')
 #print2()
-#print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
+print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
 #print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
 #print2()
 #print2()
