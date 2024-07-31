@@ -420,10 +420,6 @@ for server_round in tqdm(range(args.rounds)):
                 aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
                 aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
                 aggregated_masks[name].add_(client.train_size() * cl_mask)
-                sv_mask[cl_mask] = 0
-                sv_param = global_params[name].to('cpu', copy=True)
-                aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
-                aggregated_masks[name].add_(client.train_size() * sv_mask)
             
             # things like biases don't have masks
             else:
