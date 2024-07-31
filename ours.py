@@ -222,6 +222,26 @@ class Client:
         ul_cost = 0
         dl_cost = 0
 
+        # args.only_last_round가 아닌 경우는 global_params 받아오기
+        if not args.only_last_round and global_params:
+            # this is a FedAvg-like algorithm, where we need to reset
+            # the client's weights every round
+            mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True)
+
+            # Try to reset the optimizer state.
+            self.reset_optimizer()
+
+            if mask_changed:
+                dl_cost += self.net.mask_size # need to receive mask
+
+            if not self.initial_global_params:
+                self.initial_global_params = initial_global_params
+                # no DL cost here: we assume that these are transmitted as a random seed
+            else:
+                # otherwise, there is a DL cost: we need to receive all parameters masked '1' and
+                # all parameters that don't have a mask (e.g. biases in this case)
+                dl_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+
         #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
         for epoch in range(self.local_epochs):
 
@@ -262,7 +282,7 @@ class Client:
             
             self.curr_epoch += 1
 
-        if last:
+        if not args.only_last_round or last :
             # we only need to transmit the masked weights and all biases
             if args.fp16:
                 ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
