@@ -16,8 +16,8 @@ from tqdm import tqdm
 import warnings
 
 from datasets import get_dataset
-import models
-from models import all_models, needs_mask, initialize_mask
+import pruning.models as models
+from pruning.models import all_models, needs_mask, initialize_mask
 
 rng = np.random.default_rng()
 
