@@ -3,7 +3,25 @@ import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
 import numpy as np
+import random
 
+def random_prune(model, random_rate):
+    state = model.state_dict()
+    for name, item in model.named_buffers():
+        if 'mask' in name:
+            flatten_mask = item.data.view(-1)
+            num_nonzero = flatten_mask.sum().item()
+            num_random_prune = int(num_nonzero * random_rate)
+            
+            # Get indices of 1s in the mask
+            one_indices = torch.nonzero(flatten_mask, as_tuple=False).view(-1)
+            
+            # Randomly select indices to set to 0
+            prune_indices = random.sample(one_indices.tolist(), num_random_prune)
+            
+            # Apply random pruning
+            flatten_mask[prune_indices] = 0
+        
 
 def get_weight_threshold(model, rate, args):
     importance_all = None

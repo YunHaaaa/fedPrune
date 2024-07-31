@@ -55,9 +55,12 @@ parser.add_argument('--rounds-between-readjustments', type=int, default=10, help
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
+
+# Add DPF options
 parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: full use, 2: dpf')
 parser.add_argument('--prune-imp', dest='prune_imp', default='L1', type=str, help='Importance Method : L1, L2, grad, syn')
 parser.add_argument('--pruning-method', default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
+parser.add_argument('random-pruning-rate', type=float, default=0.05, help='random pruning rate')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -220,7 +223,7 @@ class Client:
 
 
     def train(self, global_params=None, initial_global_params=None,
-              readjustment_ratio=0.5, readjust=False, sparsity=args.sparsity, last=None):
+              readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
@@ -272,22 +275,24 @@ class Client:
                 running_loss += loss.item()
 
             if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
                 outputs = self.net(inputs, args.type_value)
                 self.criterion(outputs, labels).backward()
 
-                # TODO: change to DPF
+                # TODO: add dynamic 5% pruning
                 if args.prunig_method == 'dpf':
+                    prune_sparsity = sparsity - args.random_pruning_rate
                     if args.prune_type == 'structured':
                         filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
                         utils.filter_prune(self.net, filter_mask)
                     else:
                         threshold = utils.get_weight_threshold(self.net, prune_sparsity, args)
                         utils.weight_prune(self.net, threshold, args)
+                    utils.random_prune(self.net, args.random_pruning_rate)
 
                 elif args.pruning_method == 'prune_grow':
+                    prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
                     self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
                     self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
                 
