@@ -41,6 +41,7 @@ parser.add_argument('--total-clients', type=int, help='split the dataset between
 parser.add_argument('--min-samples', type=int, default=0, help='minimum number of samples required to allow a client to participate')
 parser.add_argument('--samples-per-client', type=int, default=20, help='samples to allocate to each client (per class, for lotteryfl, or per client, for iid)')
 parser.add_argument('--prox', type=float, default=0, help='coefficient to proximal term (i.e. in FedProx)')
+parser.add_argument('--only-last-round', default=False, action='store_true', help='only apply the last round of weights')
 
 # Pruning and regrowth options
 parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0 to 1')
@@ -401,7 +402,9 @@ for server_round in tqdm(range(args.rounds)):
         client.net.clear_gradients() # to save memory
 
         # add this client's params to the aggregate
-        if last_round:
+        if args.only_last_round and not last_round:
+            pass
+        else:
             cl_weight_params = {}
             cl_mask_params = {}
 
@@ -449,7 +452,9 @@ for server_round in tqdm(range(args.rounds)):
     # at this point, we have the sum of client parameters
     # in aggregated_params, and the sum of masks in aggregated_masks. We
     # can take the average now by simply dividing...
-    if last_round:
+    if args.only_last_round and not last_round:
+        pass
+    else:        
         for name, param in aggregated_params.items():
 
             # if this parameter has no associated mask, simply take the average.
@@ -484,7 +489,7 @@ for server_round in tqdm(range(args.rounds)):
         # reset global params to aggregated values
         global_model.load_state_dict(aggregated_params_for_mask)
 
-        if global_model.sparsity() < round_sparsity:
+        if global_model.sparsity() < round_sparsity and last_round:
             # we now have denser networks than we started with at the beginning of
             # the round. reprune on the server to get back to the desired sparsity.
             # we use layer-wise magnitude pruning as before.
