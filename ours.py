@@ -18,6 +18,7 @@ import warnings
 from datasets import get_dataset
 import pruning.models as models
 from pruning.models import all_models, needs_mask, initialize_mask
+import pruning.utils as utils
 
 rng = np.random.default_rng()
 
@@ -55,6 +56,8 @@ parser.add_argument('--remember-old', default=False, action='store_true', help="
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
 parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: full use, 2: dpf')
+parser.add_argument('--prune-imp', dest='prune_imp', default='L1', type=str, help='Importance Method : L1, L2, grad, syn')
+parser.add_argument('--pruning-method', default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -276,8 +279,17 @@ class Client:
                 self.criterion(outputs, labels).backward()
 
                 # TODO: change to DPF
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+                if args.prunig_method == 'dpf':
+                    if args.prune_type == 'structured':
+                        filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
+                        utils.filter_prune(self.net, filter_mask)
+                    else:
+                        threshold = utils.get_weight_threshold(self.net, prune_sparsity, args)
+                        utils.weight_prune(self.net, threshold, args)
+
+                elif args.pruning_method == 'prune_grow':
+                    self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                    self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
                 
                 ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
             
