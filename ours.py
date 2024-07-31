@@ -54,6 +54,7 @@ parser.add_argument('--rounds-between-readjustments', type=int, default=10, help
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
+parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: full use, 2: dpf')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -253,7 +254,7 @@ class Client:
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
 
-                outputs = self.net(inputs)
+                outputs = self.net(inputs, args.type_value)
                 loss = self.criterion(outputs, labels)
 
                 # TODO: 나중에 실험해보기
@@ -271,7 +272,7 @@ class Client:
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
-                outputs = self.net(inputs)
+                outputs = self.net(inputs, args.type_value)
                 self.criterion(outputs, labels).backward()
 
                 # TODO: change to DPF
@@ -319,7 +320,7 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                outputs = _model(inputs)
+                outputs = _model(inputs, args.type_value)
                 outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
                 total += len(labels)

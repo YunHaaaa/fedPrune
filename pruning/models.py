@@ -485,8 +485,12 @@ class MNISTNet(PrunableNet):
 
         self.init_param_sizes()
 
+    def _forward_impl(self, x, type_value):
+        # See note [TorchScript super()]
+        for m in self.modules():
+            if isinstance(m, mnn.MaskConv2d):
+                m.type_value = type_value
 
-    def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         x = x.view(-1, self.num_flat_features(x)) # flatten
@@ -494,6 +498,8 @@ class MNISTNet(PrunableNet):
         x = F.softmax(self.fc2(x), dim=1)
         return x
 
+    def forward(self, x, type_value):
+        return self._forward_impl(x, type_value)
 
 class CIFAR10Net(PrunableNet):
 
@@ -509,8 +515,12 @@ class CIFAR10Net(PrunableNet):
 
         self.init_param_sizes()
 
+    def _forward_impl(self, x, type_value):
+        # See note [TorchScript super()]
+        for m in self.modules():
+            if isinstance(m, mnn.MaskConv2d):
+                m.type_value = type_value
 
-    def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         x = x.view(-1, self.num_flat_features(x))
@@ -518,7 +528,9 @@ class CIFAR10Net(PrunableNet):
         x = F.relu(self.fc2(x))
         x = F.softmax(self.fc3(x), dim=1)
         return x
-
+    
+    def forward(self, x, type_value):
+        return self._forward_impl(x, type_value)
 
 class CIFAR100Net(PrunableNet):
 
@@ -533,8 +545,12 @@ class CIFAR100Net(PrunableNet):
 
         self.init_param_sizes()
 
+    def _forward_impl(self, x, type_value):
+        # See note [TorchScript super()]
+        for m in self.modules():
+            if isinstance(m, mnn.MaskConv2d):
+                m.type_value = type_value
 
-    def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         x = x.view(-1, self.num_flat_features(x))
@@ -542,6 +558,8 @@ class CIFAR100Net(PrunableNet):
         x = F.softmax(self.fc2(x), dim=1)
         return x
     
+    def forward(self, x, type_value):
+        return self._forward_impl(x, type_value)
 
 class EMNISTNet(PrunableNet):
 
@@ -556,14 +574,21 @@ class EMNISTNet(PrunableNet):
 
         self.init_param_sizes()
 
+    def _forward_impl(self, x, type_value):
+        # See note [TorchScript super()]
+        for m in self.modules():
+            if isinstance(m, mnn.MaskConv2d):
+                m.type_value = type_value
 
-    def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         x = x.view(-1, self.num_flat_features(x)) # flatten
         x = F.relu(self.fc1(x))
         x = F.softmax(self.fc2(x), dim=1)
         return x
+
+    def forward(self, x, type_value):
+        return self._forward_impl(x, type_value)
 
 
 class Conv2(PrunableNet):
@@ -582,14 +607,21 @@ class Conv2(PrunableNet):
 
         self.init_param_sizes()
 
+    def _forward_impl(self, x, type_value):
+        # See note [TorchScript super()]
+        for m in self.modules():
+            if isinstance(m, mnn.MaskConv2d):
+                m.type_value = type_value
 
-    def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 2, stride=2))
         x = F.relu(F.max_pool2d(self.conv2(x), 2, stride=2))
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         x = F.softmax(self.fc2(x), dim=1)
         return x
+    
+    def forward(self, x, type_value):
+        return self._forward_impl(x, type_value)
 
 
 all_models = {
