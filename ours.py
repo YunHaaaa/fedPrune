@@ -551,6 +551,8 @@ print2(f'{args.rounds} rounds of federated learning')
 # print2(f'Accuracy threshold growth method "{args.pruning_threshold_growth_method}"')
 # print2(f'Pruning method: {args.pruning_method}, resetting weights: {args.reset_weights}')
 print2()
+
+# TODO: 참여 안한 클라이언트 반영 안되게 nan으로 처리 등 수정 필요
 accuracies = list(accuracies.values())
 sparsities = list(sparsities.values())
 print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
