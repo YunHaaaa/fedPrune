@@ -261,7 +261,7 @@ class Client:
                 self.reset_weights() # applies the mask
 
                 running_loss += loss.item()
-
+            # pruning_begin값은 9  pruning_interval 10
             if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
@@ -408,11 +408,11 @@ for server_round in tqdm(range(args.rounds)):
 
         # determine sparsity desired at the end of this round
         # ...via linear interpolation
-        if server_round <= args.rate_decay_end:   # rate_decay_end의 default는 false if false -> args.round // 2
+        if server_round <= args.rate_decay_end:
             round_sparsity = args.sparsity * (args.rate_decay_end - server_round) / args.rate_decay_end + args.final_sparsity * server_round / args.rate_decay_end
         else:
-            round_sparsity = args.final_sparsity   # args.final_sparsity default는 false이고 if false -> args.sparsity
-                       
+            round_sparsity = args.final_sparsity
+
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
                                     readjustment_ratio=readjustment_ratio,
