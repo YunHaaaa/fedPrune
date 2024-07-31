@@ -408,28 +408,29 @@ for server_round in tqdm(range(args.rounds)):
         # the masked received weights to the aggregate, and adding the mask
         # to the aggregate as well.
         for name, cl_param in cl_weight_params.items():
-            if name in cl_mask_params:
+            if name in cl_mask_params:   # 현재 매개변수에 mask가 있는 지 확인한다.
                 # things like weights have masks
                 cl_mask = cl_mask_params[name]
                 sv_mask = global_params[name + '_mask'].to('cpu', copy=True)
                     
                 # calculate Hamming distance of masks for debugging
-                if readjust:
-                    dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
+                # if readjust:
+                #     dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
 
                 aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
                 aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
                 aggregated_masks[name].add_(client.train_size() * cl_mask)
-                if args.remember_old:
-                    sv_mask[cl_mask] = 0
-                    sv_param = global_params[name].to('cpu', copy=True)
-
-                    aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
-                    aggregated_masks[name].add_(client.train_size() * sv_mask)
+                sv_mask[cl_mask] = 0
+                sv_param = global_params[name].to('cpu', copy=True)
+                aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
+                aggregated_masks[name].add_(client.train_size() * sv_mask)
+            
+            # things like biases don't have masks
             else:
-                # things like biases don't have masks
-                aggregated_params[name].add_(client.train_size() * cl_param)
-
+                aggregated_params[name].add_(client.train_size() * cl_param)   
+                
+                
+                            
     # at this point, we have the sum of client parameters
     # in aggregated_params, and the sum of masks in aggregated_masks. We
     # can take the average now by simply dividing...
