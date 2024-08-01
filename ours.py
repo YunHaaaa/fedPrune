@@ -90,15 +90,16 @@ if args.final_sparsity is None:
 
 def print2(*arg, **kwargs):
     print(*arg, **kwargs, file=args.outfile)
-
+    print(*arg, **kwargs)
+    
 def dprint(*args, **kwargs):
     print(*args, **kwargs, file=sys.stderr)
 
 def print_csv_line(**kwargs):
     print2(','.join(str(x) for x in kwargs.values()))
 
-    for key, value in kwargs.items():
-        print(f"{key}: {value}")
+    # for key, value in kwargs.items():
+    #     print(f"{key}: {value}")
 
 def nan_to_num(x, nan=0, posinf=0, neginf=0):
     x = x.clone()
@@ -280,7 +281,7 @@ class Client:
                 outputs = self.net(inputs, args.type_value)
                 self.criterion(outputs, labels).backward()
 
-                if args.prunig_method == 'dpf':
+                if args.pruning_method == 'dpf':
                     prune_sparsity = sparsity - args.random_pruning_rate
                     if args.prune_type == 'structured':
                         filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
