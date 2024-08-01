@@ -230,7 +230,7 @@ class Client:
 
         ul_cost = 0
         dl_cost = 0
-
+        # TOOD: 집계한 global 모델 계속 받아 오지 않는 방법 실험해보기
         # args.only_last_round가 아닌 경우는 global_params 받아오기
         if not args.only_last_round and global_params:
             # this is a FedAvg-like algorithm, where we need to reset
@@ -277,7 +277,9 @@ class Client:
             
             if args.pruning_method == 'dpf':
                 prune_sparsity = sparsity - args.random_pruning_rate
-
+            elif args.pruning_method == 'prune_grow':
+                prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
+            # TODO: prune_grow가 FedDST랑 같은 환경에서 되도록 바꾸고 하기
             if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
