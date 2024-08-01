@@ -60,7 +60,8 @@ parser.add_argument('--final-sparsity', type=float, default=None, help='final sp
 parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: full use, 2: dpf')
 parser.add_argument('--prune-imp', dest='prune_imp', default='L1', type=str, help='Importance Method : L1, L2, grad, syn')
 parser.add_argument('--pruning-method', default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
-parser.add_argument('random-pruning-rate', type=float, default=0.05, help='random pruning rate')
+parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
+parser.add_argument('--prune-type', default='structured', choices=('structured', 'unstructured'), help='pruning type')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
