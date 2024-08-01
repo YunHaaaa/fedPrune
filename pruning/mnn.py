@@ -96,5 +96,6 @@ class MaskConv2d(nn.Conv2d):
         else:
             masked_weight = Masker_full.apply(self.weight, self.mask)
 
+        # return super(MaskConv2d, self).conv2d_forward(input, masked_weight)
         return F.conv2d(input, masked_weight, self.bias, self.stride,
                         self.padding, self.dilation, self.groups)
