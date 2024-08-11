@@ -74,7 +74,6 @@ parser.add_argument('--eval-every', default=10, type=int, help='Evaluate on test
 parser.add_argument('--device', default='0', type=device_list, help='Device to use for compute. Use "cpu" to force CPU. Otherwise, separate with commas to allow multi-GPU.')
 parser.add_argument('--min-votes', default=0, type=int, help='Minimum votes required to keep a weight')
 parser.add_argument('--no-eval', default=True, action='store_false', dest='eval')
-parser.add_argument('--grasp', default=False, action='store_true')
 parser.add_argument('--fp16', default=False, action='store_true', help='upload as fp16')
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
 

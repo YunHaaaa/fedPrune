@@ -1,6 +1,6 @@
 from synflow.Utils import load, generator
 from synflow.prune import *
-from grasp_models import MNISTNet, CIFAR10Net, CIFAR100Net
+from etc.grasp_models import MNISTNet, CIFAR10Net, CIFAR100Net
 # net = MNISTNet()
 # initialize_mask(net)
 # mp = generator.masked_parameters(net, False, False, False)
