@@ -53,6 +53,8 @@ parser.add_argument('--no-eval', default=True, action='store_false', dest='eval'
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
 parser.add_argument('--initial-rounds', default=5, type=int, help='number of "initial pruning" rounds for prunefl')
 parser.add_argument('--rounds-between-readjustments', default=50, type=int, help='rounds between readj')
+parser.add_argument('--seed', default=42, type=int, help='random seed')
+
 layer_times = [4.78686788e-05, 2.29976004e-05, 1.35797902e-06, 1.13535336e-06,
         1.06144932e-06]
 
