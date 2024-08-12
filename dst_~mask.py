@@ -69,6 +69,7 @@ parser.add_argument('--min-votes', default=0, type=int, help='Minimum votes requ
 parser.add_argument('--no-eval', default=True, action='store_false', dest='eval')
 parser.add_argument('--fp16', default=False, action='store_true', help='upload as fp16')
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
+# TODO: seed가 뽑히는 클라이언트와 데이터셋을 항상 똑같게 만들고 있지 않은지 확인 필요
 parser.add_argument('--seed', default=42, type=int, help='random seed')
 
 
@@ -257,6 +258,7 @@ class Client:
 
                 running_loss += loss.item()
             
+            # TODO: 일단 이렇게 실험해보고, ratio를 줘서 prune-retrain도 해보기
             if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
