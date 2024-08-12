@@ -257,32 +257,25 @@ class Client:
 
                 running_loss += loss.item()
             
-            if args.pruning_method == 'dpf':
-                prune_sparsity = sparsity - args.random_pruning_rate
-            elif args.pruning_method == 'prune_grow':
-                prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
-            # TODO: prune_grow가 FedDST랑 같은 환경에서 되도록 바꾸고 하기
             if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
                 outputs = self.net(inputs, args.type_value)
                 self.criterion(outputs, labels).backward()
+                prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
 
-                if args.pruning_method == 'prune_grow':
-                    prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
+                if args.pruning_method == 'dpf':
+                    if args.prune_type == 'structured':
+                        filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
+                        utils.filter_prune(self.net, filter_mask)
+                    else:
+                        threshold = utils.get_weight_threshold(self.net, prune_sparsity, args)
+                        utils.weight_prune(self.net, threshold, args)
+                    utils.random_prune(self.net, args.random_pruning_rate)
 
-            if args.pruning_method == 'dpf':
-                if args.prune_type == 'structured':
-                    filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
-                    utils.filter_prune(self.net, filter_mask)
-                else:
-                    threshold = utils.get_weight_threshold(self.net, prune_sparsity, args)
-                    utils.weight_prune(self.net, threshold, args)
-                utils.random_prune(self.net, args.random_pruning_rate)
-
-            elif args.pruning_method == 'prune_grow':
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+                elif args.pruning_method == 'prune_grow':
+                    self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                    self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
 
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
 
@@ -354,7 +347,17 @@ global_model = all_models[args.dataset](device='cpu')
 initialize_mask(global_model)
 
 
-global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution)
+if args.pruning_method == 'dpf':
+    if args.prune_type == 'structured':
+        filter_mask = utils.get_filter_mask(global_model, args.sparsity, args)
+        utils.filter_prune(global_model, filter_mask)
+    else:
+        threshold = utils.get_weight_threshold(global_model, args.sparsity, args)
+        utils.weight_prune(global_model, threshold, args)
+    utils.random_prune(global_model, args.random_pruning_rate)
+
+elif args.pruning_method == 'prune_grow':
+    global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution)
 
 initial_global_params = deepcopy(global_model.state_dict())
 
@@ -507,7 +510,18 @@ for server_round in tqdm(range(args.rounds)):
         # we now have denser networks than we started with at the beginning of
         # the round. reprune on the server to get back to the desired sparsity.
         # we use layer-wise magnitude pruning as before.
-        global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
+
+        if args.pruning_method == 'dpf':
+            if args.prune_type == 'structured':
+                filter_mask = utils.get_filter_mask(global_model, round_sparsity, args)
+                utils.filter_prune(global_model, filter_mask)
+            else:
+                threshold = utils.get_weight_threshold(global_model, round_sparsity, args)
+                utils.weight_prune(global_model, threshold, args)
+            utils.random_prune(global_model, args.random_pruning_rate)
+
+        elif args.pruning_method == 'prune_grow':
+            global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
 
     # discard old weights and apply new mask
     global_params = global_model.state_dict()

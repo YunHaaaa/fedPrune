@@ -24,7 +24,7 @@ class Masker_part(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         mask, = ctx.saved_tensors
-        return grad* mask, None
+        return grad * mask, None
 
 
 
@@ -38,7 +38,7 @@ class Masker_full(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         mask, = ctx.saved_tensors
-        return grad*(1-mask), None
+        return grad * (1-mask), None
 
 
 
@@ -47,12 +47,12 @@ class Masker_dis(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, mask):
         ctx.save_for_backward(mask)
-        return x*(1-mask)
+        return x * (1-mask)
 
     @staticmethod
     def backward(ctx, grad):
         mask, = ctx.saved_tensors
-        return grad*(1-mask), None
+        return grad * (1-mask), None
 
 
 
