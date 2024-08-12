@@ -43,12 +43,11 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
-parser.add_argument('--pruning-begin', type=int, default=9, help='first epoch number when we should readjust')
-parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
+parser.add_argument('--pruning-ratio', type=float, default=0.7, help='pruning ratio for each round')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -174,7 +173,6 @@ class Client:
         self.reset_optimizer()
 
         self.local_epochs = local_epochs
-        self.curr_epoch = 0
 
         # save the initial global params given to us by the server
         # for LTH pruning later.
@@ -197,8 +195,7 @@ class Client:
         return sum(len(x) for x in self.train_data)
 
 
-    def train(self, global_params=None, initial_global_params=None,
-              readjustment_ratio=0.5, readjust=False, sparsity=args.sparsity):
+    def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
@@ -241,21 +238,12 @@ class Client:
                 loss.backward()
                 self.optimizer.step()
 
-                self.reset_weights() # applies the mask
-
+                if epoch == self.local_epochs * pruning_ratio:
+                    self.net.apply_hard_mask()
+                
                 running_loss += loss.item()
 
-            if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-                # recompute gradient if we used FedProx penalty
-                self.optimizer.zero_grad()
-                outputs = self.net(inputs)
-                self.criterion(outputs, labels).backward()
-
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
-            self.curr_epoch += 1
+        ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
 
         # we only need to transmit the masked weights and all biases
         if args.fp16:
@@ -377,8 +365,7 @@ for server_round in tqdm(range(args.rounds)):
 
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
-                                    readjustment_ratio=readjustment_ratio,
-                                    readjust=readjust, sparsity=round_sparsity)
+                                    sparsity=round_sparsity)
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
         upload_cost[i] = train_result['ul_cost']
