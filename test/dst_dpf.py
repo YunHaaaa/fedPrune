@@ -3,17 +3,13 @@ import torch.cuda
 from torch import nn
 from torch.nn import functional as F
 import argparse
-import gc
-import itertools
 import numpy as np
 import os
 import sys
 import time
-import pickle
 from copy import deepcopy
 
 from tqdm import tqdm
-import warnings
 
 from datasets import get_dataset
 import pruning.models as models
