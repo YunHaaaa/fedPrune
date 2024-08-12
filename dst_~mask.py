@@ -12,8 +12,9 @@ from copy import deepcopy
 from tqdm import tqdm
 
 from datasets import get_dataset
-import models
-from models import all_models, needs_mask, initialize_mask
+import pruning.models as models
+from pruning.models import all_models, needs_mask, initialize_mask
+import pruning.utils as utils
 
 def device_list(x):
     if x == 'cpu':
@@ -41,11 +42,19 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
+parser.add_argument('--pruning-begin', type=int, default=9, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
-parser.add_argument('--pruning-ratio', type=float, default=0.7, help='pruning ratio for each round')
+
+# Add DPF options
+parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: full use, 2: dpf')
+parser.add_argument('--prune-imp', type=str, dest='prune_imp', default='L1', help='Importance Method : L1, L2, grad, syn')
+parser.add_argument('--pruning-method', type=str, default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
+parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
+parser.add_argument('--prune-type', type=str, default='structured', choices=('structured', 'unstructured'), help='pruning type')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -62,11 +71,13 @@ parser.add_argument('--fp16', default=False, action='store_true', help='upload a
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
 parser.add_argument('--seed', default=42, type=int, help='random seed')
 
+
 args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
 args.pid = os.getpid()
 
 rng = np.random.default_rng(args.seed)
+
 
 if args.rate_decay_end is None:
     args.rate_decay_end = args.rounds // 2
@@ -196,7 +207,8 @@ class Client:
         return sum(len(x) for x in self.train_data)
 
 
-    def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio):
+    def train(self, global_params=None, initial_global_params=None,
+              readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
@@ -232,29 +244,61 @@ class Client:
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
 
-                outputs = self.net(inputs)
+                outputs = self.net(inputs, args.type_value)
                 loss = self.criterion(outputs, labels)
+
                 if args.prox > 0:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
+
                 loss.backward()
                 self.optimizer.step()
 
-                if epoch == self.local_epochs * pruning_ratio:
-                    self.net.apply_hard_mask()
-                
-                running_loss += loss.item()
+                self.reset_weights() # applies the mask
 
-        ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
+                running_loss += loss.item()
+            
+            if args.pruning_method == 'dpf':
+                prune_sparsity = sparsity - args.random_pruning_rate
+            elif args.pruning_method == 'prune_grow':
+                prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
+            # TODO: prune_grow가 FedDST랑 같은 환경에서 되도록 바꾸고 하기
+            if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
+                # recompute gradient if we used FedProx penalty
+                self.optimizer.zero_grad()
+                outputs = self.net(inputs, args.type_value)
+                self.criterion(outputs, labels).backward()
+
+                if args.pruning_method == 'prune_grow':
+                    prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
+
+            if args.pruning_method == 'dpf':
+                if args.prune_type == 'structured':
+                    filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
+                    utils.filter_prune(self.net, filter_mask)
+                else:
+                    threshold = utils.get_weight_threshold(self.net, prune_sparsity, args)
+                    utils.weight_prune(self.net, threshold, args)
+                utils.random_prune(self.net, args.random_pruning_rate)
+
+            elif args.pruning_method == 'prune_grow':
+                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+
+            ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
+
+            self.curr_epoch += 1
 
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
         else:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+        
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
         #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
         #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        
         return ret
 
     def test(self, model=None, n_batches=0):
@@ -280,7 +324,7 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                outputs = _model(inputs)
+                outputs = _model(inputs, args.type_value)
                 outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
                 total += len(labels)
@@ -365,7 +409,10 @@ for server_round in tqdm(range(args.rounds)):
             round_sparsity = args.final_sparsity
 
         # actually perform training
-        train_result = client.train(global_params=global_params, initial_global_params=initial_global_params)
+        train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
+                                    readjustment_ratio=readjustment_ratio,
+                                    readjust=readjust, sparsity=round_sparsity)
+        
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
         upload_cost[i] = train_result['ul_cost']
