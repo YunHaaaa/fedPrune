@@ -36,11 +36,11 @@ def distribute_clients_categorical(x, p, clients=400, beta=0.1):
     return indices, n_indices, n_classes_by_client
 
 
-def distribute_clients_dirichlet(train, test, clients=400, batch_size=32, beta=0.1, rng=None):
+def distribute_clients_dirichlet(train, test, clients=400, batch_size=32, beta=0.1, seed=42):
     '''Distribute a dataset according to a Dirichlet distribution.
     '''
 
-    rng = np.random.default_rng(rng)
+    rng = np.random.default_rng(seed)
 
     unique = torch.Tensor(train.targets).unique()
 
@@ -55,11 +55,11 @@ def distribute_clients_dirichlet(train, test, clients=400, batch_size=32, beta=0
     return train_idx, test_idx
 
 
-def distribute_iid(train, test, clients=400, samples_per_client=40, batch_size=32, rng=None):
+def distribute_iid(train, test, clients=400, samples_per_client=40, batch_size=32, seed=42):
     '''Distribute a dataset in an iid fashion, i.e. shuffle the data and then
     partition it.'''
 
-    rng = np.random.default_rng(rng)
+    rng = np.random.default_rng(seed)
 
     train_idx = np.arange(len(train.targets))
     rng.shuffle(train_idx)
@@ -75,7 +75,7 @@ def distribute_iid(train, test, clients=400, samples_per_client=40, batch_size=3
 
 def get_mnist_or_cifar10(dataset='mnist', mode='dirichlet', path=None, clients=400,
                          classes=2, samples=20, batch_size=32, beta=0.1,
-                         unbalance_rate=1.0, rng=None, **kwargs):
+                         unbalance_rate=1.0, seed=42, **kwargs):
     '''Sample a FL dataset from MNIST, as in the LotteryFL paper.
 
     Parameters:
@@ -109,7 +109,7 @@ def get_mnist_or_cifar10(dataset='mnist', mode='dirichlet', path=None, clients=4
     if path is None:
         path = os.path.join('..', 'data', dataset)
 
-    rng = np.random.default_rng(rng)
+    rng = np.random.default_rng(seed)
 
     if mode in ('dirichlet', 'iid'):
         if dataset == 'mnist':

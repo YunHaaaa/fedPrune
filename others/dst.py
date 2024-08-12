@@ -16,8 +16,6 @@ from datasets import get_dataset
 import models
 from models import all_models, needs_mask, initialize_mask
 
-rng = np.random.default_rng()
-
 def device_list(x):
     if x == 'cpu':
         return [x]
@@ -70,6 +68,8 @@ args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
 args.pid = os.getpid()
 
+rng = np.random.default_rng(args.seed)
+
 if args.rate_decay_end is None:
     args.rate_decay_end = args.rounds // 2
 if args.final_sparsity is None:
@@ -77,15 +77,16 @@ if args.final_sparsity is None:
 
 def print2(*arg, **kwargs):
     print(*arg, **kwargs, file=args.outfile)
-
+    print(*arg, **kwargs)
+    
 def dprint(*args, **kwargs):
     print(*args, **kwargs, file=sys.stderr)
 
 def print_csv_line(**kwargs):
     print2(','.join(str(x) for x in kwargs.values()))
 
-    for key, value in kwargs.items():
-        print(f"{key}: {value}")
+    # for key, value in kwargs.items():
+    #     print(f"{key}: {value}")
 
 def nan_to_num(x, nan=0, posinf=0, neginf=0):
     x = x.clone()
@@ -538,18 +539,21 @@ for server_round in tqdm(range(args.rounds)):
         download_cost[:] = 0
         upload_cost[:] = 0
 
-#print2('OVERALL SUMMARY')
-#print2()
-#print2(f'{args.total_clients} clients, {args.clients} chosen each round')
-#print2(f'E={args.epochs} local epochs per round, B={args.batch_size} mini-batch size')
-#print2(f'{args.rounds} rounds of federated learning')
-#print2(f'Target sparsity r_target={args.target_sparsity}, pruning rate (per round) r_p={args.pruning_rate}')
-#print2(f'Accuracy threshold starts at {args.pruning_threshold} and ends at {args.final_pruning_threshold}')
-#print2(f'Accuracy threshold growth method "{args.pruning_threshold_growth_method}"')
-#print2(f'Pruning method: {args.pruning_method}, resetting weights: {args.reset_weights}')
-#print2()
-#print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
-#print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
-#print2()
-#print2()
+print2('OVERALL SUMMARY')
+print2()
+print2(f'{args.total_clients} clients, {args.clients} chosen each round')
+print2(f'E={args.epochs} local epochs per round, B={args.batch_size} mini-batch size')
+print2(f'{args.rounds} rounds of federated learning')
+# print2(f'Target sparsity r_target={args.target_sparsity}, pruning rate (per round) r_p={args.pruning_rate}')
+# print2(f'Accuracy threshold starts at {args.pruning_threshold} and ends at {args.final_pruning_threshold}')
+# print2(f'Accuracy threshold growth method "{args.pruning_threshold_growth_method}"')
+# print2(f'Pruning method: {args.pruning_method}, resetting weights: {args.reset_weights}')
+print2()
+
+accuracies = list(accuracies.values())
+sparsities = list(sparsities.values())
+print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
+print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
+print2()
+print2()
 
