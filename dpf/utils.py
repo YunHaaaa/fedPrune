@@ -25,7 +25,7 @@ def random_prune(model, random_rate):
 
 def get_weight_threshold(model, rate, args):
     importance_all = None
-    for name, item in model.module.named_parameters():
+    for name, item in model.named_parameters():
         # if len(item.size())==4 and 'mask' not in name:
         if ('conv' in name or 'downsample_p.0' in name) and 'mask' not in name:
             weights = item.data.view(-1).cpu()
@@ -104,7 +104,7 @@ def cal_sparsity(model):
     mask_length = 0
     total_weights = 0
 
-    for name, item in model.module.named_parameters():
+    for name, item in model.named_parameters():
         if 'mask' in name:
             flatten = item.data.view(-1)
             np_flatten = flatten.cpu().numpy()

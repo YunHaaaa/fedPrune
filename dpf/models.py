@@ -8,7 +8,9 @@ import torch.nn.functional as F
 import torchvision
 import prune as torch_prune
 import warnings
-import mnn
+
+import os
+import pruning.mnn as mnn
 
 
 # Utility functions
