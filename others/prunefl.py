@@ -20,8 +20,6 @@ from models import all_models, needs_mask, initialize_mask
 
 import pickle
 
-rng = np.random.default_rng()
-
 def device_list(x):
     if x == 'cpu':
         return [x]
@@ -61,6 +59,9 @@ layer_times = [4.78686788e-05, 2.29976004e-05, 1.35797902e-06, 1.13535336e-06,
 args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
 args.pid = os.getpid()
+
+rng = np.random.default_rng(args.seed)
+
 
 def print2(*arg, **kwargs):
     print(*arg, **kwargs, file=args.outfile)

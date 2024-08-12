@@ -19,8 +19,6 @@ from datasets import get_dataset
 import models
 from models import all_models, needs_mask, initialize_mask
 
-rng = np.random.default_rng()
-
 def device_list(x):
     if x == 'cpu':
         return [x]
@@ -72,6 +70,9 @@ parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileT
 args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
 args.pid = os.getpid()
+
+rng = np.random.default_rng(args.seed)
+
 
 if args.rate_decay_end is None:
     args.rate_decay_end = args.rounds // 2
