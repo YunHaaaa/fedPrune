@@ -57,7 +57,8 @@ parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform'
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
 parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: full use, 2: dpf')
 parser.add_argument('--prune-imp', dest='prune_imp', default='L1', type=str, help='Importance Method : L1, L2, grad, syn')
-parser.add_argument('--pruning-method', default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
+parser.add_argument('--pruning-method', default='prune_grow', choices=('dpf', 'prune_grow'), help='pruning method')
+parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -250,7 +251,8 @@ class Client:
         for epoch in range(self.local_epochs):
 
             self.net.train()
-
+            global_weight = self.net.conv1.weight_mask
+            print("global_weight",global_weight)
             running_loss = 0.
             for inputs, labels in self.train_data:
                 inputs = inputs.to(self.device)
@@ -266,28 +268,34 @@ class Client:
 
                 loss.backward()
                 self.optimizer.step()
-
-                self.reset_weights() # applies the mask
+                mask_params = {key: value for key, value in global_params.items() if key.endswith('_mask')}
+                keys_only = mask_params.keys()
+                # print(list(keys_only))
+                
+                # print(mask_params.keys)  
+                # self.reset_weights() # applies the mask
+                
 
                 running_loss += loss.item()
 
             if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
-                self.optimizer.zero_grad()
-                outputs = self.net(inputs, args.type_value)
-                self.criterion(outputs, labels).backward()
+            self.optimizer.zero_grad()
+            outputs = self.net(inputs, args.type_value)
+            self.criterion(outputs, labels).backward()
 
-                # TODO: change to DPF
                 if args.prunig_method == 'dpf':
+                    prune_sparsity = sparsity - args.random_pruning_rate
                     if args.prune_type == 'structured':
                         filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
                         utils.filter_prune(self.net, filter_mask)
                     else:
                         threshold = utils.get_weight_threshold(self.net, prune_sparsity, args)
                         utils.weight_prune(self.net, threshold, args)
+                    utils.random_prune(self.net, args.random_pruning_rate)
 
                 elif args.pruning_method == 'prune_grow':
+                    prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
                     self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
                     self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
                 
@@ -304,7 +312,7 @@ class Client:
             
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
-        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
+        # dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
         #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         
         return ret
@@ -544,28 +552,28 @@ for server_round in tqdm(range(args.rounds)):
 
     for client_id in clients:
         i = client_ids.index(client_id)
-        if server_round % args.eval_every == 0 and args.eval:
-            print_csv_line(pid=args.pid,
-                           dataset=args.dataset,
-                           clients=args.clients,
-                           total_clients=len(clients),
-                           round=server_round,
-                           batch_size=args.batch_size,
-                           epochs=args.epochs,
-                           target_sparsity=round_sparsity,
-                           pruning_rate=args.readjustment_ratio,
-                           initial_pruning_threshold='',
-                           final_pruning_threshold='',
-                           pruning_threshold_growth_method='',
-                           pruning_method='',
-                           lth=False,
-                           client_id=client_id,
-                           # TODO: client의 accuracy가 개별로 업데이트 되고 있는지 확인 후 수정
-                           accuracy=accuracies[client_id],
-                           sparsity=sparsities[client_id],
-                           compute_time=compute_times[i],
-                           download_cost=download_cost[i],
-                           upload_cost=upload_cost[i])
+        # if server_round % args.eval_every == 0 and args.eval:
+        #     print_csv_line(pid=args.pid,
+        #                    dataset=args.dataset,
+        #                    clients=args.clients,
+        #                    total_clients=len(clients),
+        #                    round=server_round,
+        #                    batch_size=args.batch_size,
+        #                    epochs=args.epochs,
+        #                    target_sparsity=round_sparsity,
+        #                    pruning_rate=args.readjustment_ratio,
+        #                    initial_pruning_threshold='',
+        #                    final_pruning_threshold='',
+        #                    pruning_threshold_growth_method='',
+        #                    pruning_method='',
+        #                    lth=False,
+        #                    client_id=client_id,
+        #                    # TODO: client의 accuracy가 개별로 업데이트 되고 있는지 확인 후 수정
+        #                    accuracy=accuracies[client_id],
+        #                    sparsity=sparsities[client_id],
+        #                    compute_time=compute_times[i],
+        #                    download_cost=download_cost[i],
+        #                    upload_cost=upload_cost[i])
 
         # if we didn't send initial global params to any clients in the first round, send them now.
         # (in the real world, this could be implemented as the transmission of

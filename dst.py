@@ -189,7 +189,8 @@ class Client:
 
         self.learning_rate = learning_rate
         self.reset_optimizer()
-
+   
+     
         self.local_epochs = local_epochs
         self.curr_epoch = 0
 
@@ -257,6 +258,12 @@ class Client:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
                 loss.backward()
                 self.optimizer.step()
+                mask_params = {key: value for key, value in global_params.items() if key.endswith('_mask')}
+                print(mask_params)    
+                #if you want to fix mask
+                # print("self.net.conv.weight",self.net)
+                # print("global_params",global_params)
+                # print("self.net.conv1.weight_mask",self.net.conv1.weight_mask)
 
                 self.reset_weights() # applies the mask
 
