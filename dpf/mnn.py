@@ -70,8 +70,6 @@ class Masker_full_use(torch.autograd.Function):
 
 
 
-
-# TODO: MaskLinear도 만들어야 함
 class MaskConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1,
                  padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros'):
@@ -99,3 +97,25 @@ class MaskConv2d(nn.Conv2d):
         # return super(MaskConv2d, self).conv2d_forward(input, masked_weight)
         return F.conv2d(input, masked_weight, self.bias, self.stride,
                         self.padding, self.dilation, self.groups)
+    
+
+class MaskLinear(nn.Linear):
+    def __init__(self, in_features, out_features, bias=True):
+        super(MaskLinear, self).__init__(in_features, out_features, bias)
+        self.mask = nn.Parameter(torch.ones(self.weight.size()), requires_grad=False)
+
+        self.type_value = 0
+
+    def forward(self, input):
+        if self.type_value == 0:
+            masked_weight = Masker_part.apply(self.weight, self.mask)
+        elif self.type_value == 2:
+            masked_weight = Masker.apply(self.weight, self.mask)
+        elif self.type_value == 3:
+            masked_weight = Masker_dis.apply(self.weight, self.mask)
+        elif self.type_value == 4:
+            masked_weight = Masker_full_use.apply(self.weight, self.mask)
+        else:
+            masked_weight = Masker_full.apply(self.weight, self.mask)
+
+        return F.linear(input, masked_weight, self.bias)
