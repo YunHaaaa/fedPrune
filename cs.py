@@ -193,7 +193,7 @@ class Client:
         self.net = net(device=self.device).to(self.device)
         initialize_mask(self.net)
         self.criterion = nn.CrossEntropyLoss()
-
+        self.round = 0
         self.learning_rate = learning_rate
         self.reset_optimizer()
 
@@ -222,12 +222,14 @@ class Client:
 
 
     def train(self, global_params=None, initial_global_params=None,
-              readjustment_ratio=0.5, readjust=False, sparsity=args.sparsity):
+              readjustment_ratio=0.5, server_round=0 ,readjust=False, sparsity=args.sparsity):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
         dl_cost = 0
-
+        local_params = {}
+        global_mask = {}
+        
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
             # the client's weights every round
@@ -267,7 +269,6 @@ class Client:
                 running_loss += loss.item()
 
 
-                
             # if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
             #     prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
             #     # recompute gradient if we used FedProx penalty
@@ -279,6 +280,27 @@ class Client:
             #     self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
             #     ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
             self.curr_epoch += 1
+        
+        if server_round == 0:
+            pass
+        else:
+            local_params = self.net.state_dict()
+            for name, mask_params in global_params.items():
+                if name.endswith('mask'):
+                    global_mask[name] = mask_params
+                    # global_mask[name + '_mask'] = global_mask[name + '_mask'].to(device=device, copy=True)
+                    # inverse_mask[name] = ~mask_params
+                
+            # global_mask[name] = global_mask[name].to(device='cpu', copy=True)
+            for name, local_param in self.net.items():
+                if name.endswith('weight'):
+                    local_params[name].add_(client.train_size() * local_param * ~global_mask[name + '_mask'])
+                else:
+                    local_params[name].add_(client.train_size() * local_param)
+            
+            self.net.load_state_dict(local_params)
+            
+
 
         # we only need to transmit the masked weights and all biases
         if args.fp16:
@@ -420,7 +442,7 @@ for server_round in tqdm(range(args.rounds)):
                        
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
-                                    readjustment_ratio=readjustment_ratio,
+                                    readjustment_ratio=readjustment_ratio,server_round = server_round,
                                     readjust=True, sparsity=round_sparsity)
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
@@ -434,7 +456,6 @@ for server_round in tqdm(range(args.rounds)):
 
         cl_weight_params = {}
         cl_mask_params = {}
-        global_mask = {}
         inverse_mask = {}
 
         # first deduce masks for the received weights
@@ -456,29 +477,30 @@ for server_round in tqdm(range(args.rounds)):
         # the masked received weights to the aggregate, and adding the mask
         # to the aggregate as well.
         
-        mask_params = {key: value for key, value in global_params.items() if key.endswith('_mask')}
+        # mask_params = {key: value for key, value in global_params.items() if key.endswith('_mask')}
         
-        for name, mask_params in mask_params.items():
-            if name.endswith('mask'):
-                global_mask[name] = mask_params
-                # global_mask[name + '_mask'] = global_mask[name + '_mask'].to(device=device, copy=True)
-                # inverse_mask[name] = ~mask_params
+        # for name, mask_params in mask_params.items():
+        #     if name.endswith('mask'):
+        #         global_mask[name] = mask_params
+        #         # global_mask[name + '_mask'] = global_mask[name + '_mask'].to(device=device, copy=True)
+        #         # inverse_mask[name] = ~mask_params
                 
-            global_mask[name] = global_mask[name].to(device='cpu', copy=True)
+        #     global_mask[name] = global_mask[name].to(device='cpu', copy=True)
     
             
         
         for name, cl_param in cl_params.items():
             # if initial_round == 1:
             #     aggregated_params[name].add_(client.train_size() * cl_param )
-            
-            # else:
-                if name.endswith('weight'):
-                    aggregated_params[name].add_(client.train_size() * cl_param * ~global_mask[name + '_mask'])
-                else:
-                    aggregated_params[name].add_(client.train_size() * cl_param)
-                
                 aggregated_params[name] = aggregated_params[name].to(device='cpu', copy=True)
+                aggregated_params[name].add_(client.train_size() * cl_param)
+            # else:
+                # if name.endswith('weight'):
+                #     aggregated_params[name].add_(client.train_size() * cl_param * ~global_mask[name + '_mask'])
+                # else:
+                   
+                
+                
     
             
 
