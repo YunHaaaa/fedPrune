@@ -187,6 +187,8 @@ class Client:
     def reset_weights(self, *args, **kwargs):
         return self.net.reset_weights(*args, **kwargs)
 
+    def apply_hard_mask(self):
+        return self.net.apply_hard_mask()
 
     def sparsity(self, *args, **kwargs):
         return self.net.sparsity(*args, **kwargs)
@@ -240,7 +242,7 @@ class Client:
                 self.optimizer.step()
 
                 if epoch == self.local_epochs * pruning_ratio:
-                    self.net.apply_hard_mask()
+                    self.apply_hard_mask()
                 
                 running_loss += loss.item()
 

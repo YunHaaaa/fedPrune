@@ -24,7 +24,7 @@ class Masker_part(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         mask, = ctx.saved_tensors
-        return grad* mask, None
+        return grad * mask, None
 
 
 
@@ -38,7 +38,7 @@ class Masker_full(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         mask, = ctx.saved_tensors
-        return grad*(1-mask), None
+        return grad * (1-mask), None
 
 
 
@@ -47,12 +47,12 @@ class Masker_dis(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, mask):
         ctx.save_for_backward(mask)
-        return x*(1-mask)
+        return x * (1-mask)
 
     @staticmethod
     def backward(ctx, grad):
         mask, = ctx.saved_tensors
-        return grad*(1-mask), None
+        return grad * (1-mask), None
 
 
 
@@ -66,8 +66,6 @@ class Masker_full_use(torch.autograd.Function):
     def backward(ctx, grad):
         mask, = ctx.saved_tensors
         return grad, None
-
-
 
 
 
@@ -99,3 +97,25 @@ class MaskConv2d(nn.Conv2d):
         # return super(MaskConv2d, self).conv2d_forward(input, masked_weight)
         return F.conv2d(input, masked_weight, self.bias, self.stride,
                         self.padding, self.dilation, self.groups)
+    
+
+class MaskLinear(nn.Linear):
+    def __init__(self, in_features, out_features, bias=True):
+        super(MaskLinear, self).__init__(in_features, out_features, bias)
+        self.mask = nn.Parameter(torch.ones(self.weight.size()), requires_grad=False)
+
+        self.type_value = 0
+
+    def forward(self, input):
+        if self.type_value == 0:
+            masked_weight = Masker_part.apply(self.weight, self.mask)
+        elif self.type_value == 2:
+            masked_weight = Masker.apply(self.weight, self.mask)
+        elif self.type_value == 3:
+            masked_weight = Masker_dis.apply(self.weight, self.mask)
+        elif self.type_value == 4:
+            masked_weight = Masker_full_use.apply(self.weight, self.mask)
+        else:
+            masked_weight = Masker_full.apply(self.weight, self.mask)
+
+        return F.linear(input, masked_weight, self.bias)

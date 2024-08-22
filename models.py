@@ -390,7 +390,7 @@ class PrunableNet(nn.Module):
 
             self.load_state_dict(new_state)
         return mask_changed
-
+    
     def apply_hard_mask(self):
         """Apply the current mask to the network, setting masked weights to zero
         and ensuring no gradient updates are applied to masked weights."""
