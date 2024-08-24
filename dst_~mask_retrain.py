@@ -252,10 +252,8 @@ class Client:
                 if args.prox > 0:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
 
-                loss.backward()
+                loss.backward() 
                 self.optimizer.step()
-
-                self.reset_weights() # applies the mask
 
                 running_loss += loss.item()
             
@@ -291,8 +289,8 @@ class Client:
         
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
-        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
-        #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        # dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
+        # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         
         return ret
 

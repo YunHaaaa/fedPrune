@@ -48,6 +48,7 @@ parser.add_argument('--rounds-between-readjustments', type=int, default=10, help
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
+parser.add_argument('--pruning-ratio', type=float, default=0.7, help='pruning ratio for each round')
 
 # Add DPF options
 parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: full use, 2: dpf')
@@ -208,7 +209,7 @@ class Client:
         return sum(len(x) for x in self.train_data)
 
 
-    def train(self, global_params=None, initial_global_params=None,
+    def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio,
               readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
         '''Train the client network for a single round.'''
 
@@ -251,10 +252,8 @@ class Client:
                 if args.prox > 0:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
 
-                loss.backward()
+                loss.backward() 
                 self.optimizer.step()
-
-                self.reset_weights() # applies the mask
 
                 running_loss += loss.item()
             
@@ -291,8 +290,8 @@ class Client:
         
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
-        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
-        #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        # dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
+        # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         
         return ret
 
@@ -371,7 +370,7 @@ upload_cost = np.zeros(len(clients))
 
 # for each round t = 1, 2, ... do
 for server_round in tqdm(range(args.rounds)):
-
+    
     # sample clients
     client_indices = rng.choice(list(clients.keys()), size=args.clients)
 
