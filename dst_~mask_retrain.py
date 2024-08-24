@@ -12,9 +12,9 @@ from copy import deepcopy
 from tqdm import tqdm
 
 from datasets import get_dataset
-import pruning.models as models
-from pruning.models import all_models, needs_mask, initialize_mask
-import pruning.utils as utils
+import dpf.models as models
+from dpf.models import all_models, needs_mask, initialize_mask
+import dpf.utils as utils
 
 def device_list(x):
     if x == 'cpu':
@@ -187,6 +187,7 @@ class Client:
         self.reset_optimizer()
 
         self.local_epochs = local_epochs
+        self.curr_epoch = 0
 
         # save the initial global params given to us by the server
         # for LTH pruning later.
@@ -252,7 +253,7 @@ class Client:
                 if args.prox > 0:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
 
-                loss.backward() 
+                loss.backward()
                 self.optimizer.step()
 
                 running_loss += loss.item()
@@ -289,8 +290,8 @@ class Client:
         
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
-        # dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
-        # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
+        #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         
         return ret
 
