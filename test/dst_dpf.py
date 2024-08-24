@@ -12,9 +12,9 @@ from copy import deepcopy
 from tqdm import tqdm
 
 from datasets import get_dataset
-import pruning.models as models
-from pruning.models import all_models, needs_mask, initialize_mask
-import pruning.utils as utils
+import dpf.models as models
+from dpf.models import all_models, needs_mask, initialize_mask
+import dpf.utils as utils
 
 def device_list(x):
     if x == 'cpu':

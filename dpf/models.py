@@ -10,7 +10,7 @@ import prune as torch_prune
 import warnings
 
 import os
-import pruning.mnn as mnn
+import dpf.mnn as mnn
 
 
 # Utility functions
