@@ -482,15 +482,15 @@ class MNISTNet(PrunableNet):
         self.conv1 = mnn.MaskConv2d(1, 10, 5) # "Conv 1-10"
         self.conv2 = mnn.MaskConv2d(10, 20, 5) # "Conv 10-20"
 
-        self.fc1 = nn.Linear(20 * 16 * 16, 50)
-        self.fc2 = nn.Linear(50, 10)
+        self.fc1 = mnn.MaskLinear(20 * 16 * 16, 50)
+        self.fc2 = mnn.MaskLinear(50, 10)
 
         self.init_param_sizes()
 
     def _forward_impl(self, x, type_value):
         # See note [TorchScript super()]
         for m in self.modules():
-            if isinstance(m, mnn.MaskConv2d):
+            if isinstance(m, mnn.MaskConv2d) or isinstance(m,mnn.MaskLinear):
                 m.type_value = type_value
 
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
@@ -511,16 +511,16 @@ class CIFAR10Net(PrunableNet):
         self.conv1 = mnn.MaskConv2d(3, 6, 5)
         self.conv2 = mnn.MaskConv2d(6, 16, 5)
 
-        self.fc1 = nn.Linear(16 * 20 * 20, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        self.fc1 = mnn.MaskLinear(16 * 20 * 20, 120)
+        self.fc2 = mnn.MaskLinear(120, 84)
+        self.fc3 = mnn.MaskLinear(84, 10)
 
         self.init_param_sizes()
 
     def _forward_impl(self, x, type_value):
         # See note [TorchScript super()]
         for m in self.modules():
-            if isinstance(m, mnn.MaskConv2d):
+            if isinstance(m, mnn.MaskConv2d) or isinstance(m,mnn.MaskLinear):
                 m.type_value = type_value
 
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
@@ -542,15 +542,15 @@ class CIFAR100Net(PrunableNet):
         self.conv1 = mnn.MaskConv2d(3, 6, 5)
         self.conv2 = mnn.MaskConv2d(6, 16, 5)
 
-        self.fc1 = nn.Linear(16 * 20 * 20, 120)
-        self.fc2 = nn.Linear(120, 100)
+        self.fc1 = mnn.MaskLinear(16 * 20 * 20, 120)
+        self.fc2 = mnn.MaskLinear(120, 100)
 
         self.init_param_sizes()
 
     def _forward_impl(self, x, type_value):
         # See note [TorchScript super()]
         for m in self.modules():
-            if isinstance(m, mnn.MaskConv2d):
+            if isinstance(m, mnn.MaskConv2d) or isinstance(m,mnn.MaskLinear):
                 m.type_value = type_value
 
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
@@ -571,15 +571,15 @@ class EMNISTNet(PrunableNet):
         self.conv1 = mnn.MaskConv2d(1, 10, 5) # "Conv 1-10"
         self.conv2 = mnn.MaskConv2d(10, 20, 5) # "Conv 10-20"
 
-        self.fc1 = nn.Linear(20 * 16 * 16, 512)
-        self.fc2 = nn.Linear(512, 62)
+        self.fc1 = mnn.MaskLinear(20 * 16 * 16, 512)
+        self.fc2 = mnn.MaskLinear(512, 62)
 
         self.init_param_sizes()
 
     def _forward_impl(self, x, type_value):
         # See note [TorchScript super()]
         for m in self.modules():
-            if isinstance(m, mnn.MaskConv2d):
+            if isinstance(m, mnn.MaskConv2d) or isinstance(m,mnn.MaskLinear):
                 m.type_value = type_value
 
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
@@ -604,15 +604,15 @@ class Conv2(PrunableNet):
         self.conv1 = mnn.MaskConv2d(1, 32, 5, padding=2)
         self.conv2 = mnn.MaskConv2d(32, 64, 5, padding=2)
 
-        self.fc1 = nn.Linear(64 * 7 * 7, 2048)
-        self.fc2 = nn.Linear(2048, 62)
+        self.fc1 = mnn.MaskLinear(64 * 7 * 7, 2048)
+        self.fc2 = mnn.MaskLinear(2048, 62)
 
         self.init_param_sizes()
 
     def _forward_impl(self, x, type_value):
         # See note [TorchScript super()]
         for m in self.modules():
-            if isinstance(m, mnn.MaskConv2d):
+            if isinstance(m, mnn.MaskConv2d) or isinstance(m,mnn.MaskLinear):
                 m.type_value = type_value
 
         x = F.relu(F.max_pool2d(self.conv1(x), 2, stride=2))
