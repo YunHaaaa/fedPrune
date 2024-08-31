@@ -299,6 +299,10 @@ dprint('Initializing clients...')
 clients = {}
 client_ids = []
 
+accuracy_history = []
+download_cost_history = []
+upload_cost_history = []
+
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, net=all_models[args.dataset],
                 learning_rate=args.eta, local_epochs=args.epochs,
@@ -478,6 +482,10 @@ for server_round in tqdm(range(args.rounds)):
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
+        accuracy_history.append(np.mean(list(accuracies.values())))
+        download_cost_history.append(sum(download_cost))
+        upload_cost_history.append(sum(upload_cost))
+
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:
@@ -532,3 +540,16 @@ print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np
 print2()
 print2()
 
+
+for i in range(1, len(accuracy_history)):
+    accuracy_gain = (accuracy_history[i] - accuracy_history[i-1]) / accuracy_history[i-1]
+    download_increase = download_cost_history[i] - download_cost_history[i-1]
+    upload_increase = upload_cost_history[i] - upload_cost_history[i-1]
+    
+    print2(f'Round {i * args.eval_every}:')
+    print2(f'    Accuracy Gain: {accuracy_gain * 100:.2f}%')
+    print2(f'    Download Cost Increase: {download_increase}')
+    print2(f'    Upload Cost Increase: {upload_increase}')
+    print2()
+
+print2('Training Complete')
