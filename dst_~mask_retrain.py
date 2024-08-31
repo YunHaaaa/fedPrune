@@ -8,6 +8,7 @@ import os
 import sys
 import time
 from copy import deepcopy
+import csv
 
 from tqdm import tqdm
 
@@ -259,29 +260,19 @@ class Client:
                 running_loss += loss.item()
             
             if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
+                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
-                outputs = self.net(inputs, args.type_value)
+                outputs = self.net(inputs)
                 self.criterion(outputs, labels).backward()
-                prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
 
-                if args.pruning_method == 'dpf':
-                    if args.prune_type == 'structured':
-                        filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
-                        utils.filter_prune(self.net, filter_mask)
-                    else:
-                        threshold = utils.get_weight_threshold(self.net, prune_sparsity, args)
-                        utils.weight_prune(self.net, threshold, args)
-                    utils.random_prune(self.net, args.random_pruning_rate)
-
-                elif args.pruning_method == 'prune_grow':
-                    self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
-                    self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-
-            ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
-
+                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+                
+                ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
+                
             self.curr_epoch += 1
-
+            
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
@@ -334,6 +325,11 @@ class Client:
 dprint('Initializing clients...')
 clients = {}
 client_ids = []
+
+accuracy_history = []
+download_cost_history = []
+upload_cost_history = []
+
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, net=all_models[args.dataset],
@@ -538,6 +534,10 @@ for server_round in tqdm(range(args.rounds)):
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
+        accuracy_history.append(np.mean(list(accuracies.values())))
+        download_cost_history.append(sum(download_cost))
+        upload_cost_history.append(sum(upload_cost))
+        
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:
@@ -592,3 +592,22 @@ print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np
 print2()
 print2()
 
+
+filename = f"{args.outfile}.csv"
+
+with open(filename, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    
+    writer.writerow(['Round', 'Accuracy (%)', 'Download Cost', 'Upload Cost'])
+    
+    for i in range(1, len(accuracy_history)):
+        round_num = i * args.eval_every
+        accuracy = accuracy_history[i] * 100  # 퍼센트로 변환
+        download_cost = download_cost_history[i]
+        upload_cost = upload_cost_history[i]
+        
+        writer.writerow([round_num, accuracy, download_cost, upload_cost])
+
+print2('Training history saved to', filename)
+
+print2('Training Complete')

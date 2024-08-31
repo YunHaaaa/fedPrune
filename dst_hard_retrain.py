@@ -8,6 +8,7 @@ import os
 import sys
 import time
 from copy import deepcopy
+import csv
 
 from tqdm import tqdm
 
@@ -547,24 +548,21 @@ print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np
 print2()
 print2()
 
-accuracy_histories = []
-download_histories = []
-upload_histories = []
+filename = f"{args.outfile}.csv"
 
-
-for i in range(1, len(accuracy_history)):
+with open(filename, mode='w', newline='') as file:
+    writer = csv.writer(file)
     
-    accuracy_histories.append(accuracy_history[i] * 100)  # 퍼센트로 변환
-    download_histories.append(download_cost_history[i])
-    upload_histories.append(upload_cost_history[i])
+    writer.writerow(['Round', 'Accuracy (%)', 'Download Cost', 'Upload Cost'])
     
-    print2(f'Round {i * args.eval_every}:')
-    print2(f'    Accuracy History: {accuracy_history[i] * 100:.2f}%')
-    print2(f'    Download Cost History: {download_cost_history[i]}')
-    print2(f'    Upload Cost History: {upload_cost_history[i]}')
-    print2()
+    for i in range(1, len(accuracy_history)):
+        round_num = i * args.eval_every
+        accuracy = accuracy_history[i] * 100  # 퍼센트로 변환
+        download_cost = download_cost_history[i]
+        upload_cost = upload_cost_history[i]
+        
+        writer.writerow([round_num, accuracy, download_cost, upload_cost])
 
-rounds = list(range(1, len(accuracy_history)))  # 라운드 번호
-
+print2('Training history saved to', filename)
 
 print2('Training Complete')
