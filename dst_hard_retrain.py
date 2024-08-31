@@ -253,13 +253,13 @@ class Client:
         else:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
-        with torch.no_grad():
-            for name, param in self.named_parameters():
-                if name in masked_weights:
-                    mask_name = name + '_mask'
-                    mask = self.state_dict()[mask_name].to(self.device)
-
-                    param.data[~mask] = masked_weights[name]
+            
+        # with torch.no_grad():
+        #     for name, param in self.net.named_parameters():
+        #         if name in masked_weights:
+        #             mask_name = name + '_mask'
+        #             mask = self.net.state_dict()[mask_name].to(self.device)
+        #             param.data[~mask] = masked_weights[name]
 
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
