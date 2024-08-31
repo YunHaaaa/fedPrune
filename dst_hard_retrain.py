@@ -10,6 +10,7 @@ import time
 from copy import deepcopy
 
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from datasets import get_dataset
 import models
@@ -540,16 +541,55 @@ print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np
 print2()
 print2()
 
+accuracy_gains = []
+download_increases = []
+upload_increases = []
+
 
 for i in range(1, len(accuracy_history)):
     accuracy_gain = (accuracy_history[i] - accuracy_history[i-1]) / accuracy_history[i-1]
     download_increase = download_cost_history[i] - download_cost_history[i-1]
     upload_increase = upload_cost_history[i] - upload_cost_history[i-1]
     
+    accuracy_gains.append(accuracy_gain * 100)  # 퍼센트로 변환
+    download_increases.append(download_increase)
+    upload_increases.append(upload_increase)
+    
     print2(f'Round {i * args.eval_every}:')
     print2(f'    Accuracy Gain: {accuracy_gain * 100:.2f}%')
     print2(f'    Download Cost Increase: {download_increase}')
     print2(f'    Upload Cost Increase: {upload_increase}')
     print2()
+
+rounds = list(range(1, len(accuracy_history)))  # 라운드 번호
+
+plt.figure(figsize=(14, 8))
+
+plt.subplot(3, 1, 1)
+plt.plot(rounds, accuracy_gains, marker='o', label='Accuracy Gain (%)')
+plt.xlabel('Round')
+plt.ylabel('Accuracy Gain (%)')
+plt.title('Accuracy Gain Over Rounds')
+plt.grid(True)
+plt.legend()
+
+plt.subplot(3, 1, 2)
+plt.plot(rounds, download_increases, marker='o', color='orange', label='Download Cost Increase')
+plt.xlabel('Round')
+plt.ylabel('Download Cost Increase')
+plt.title('Download Cost Increase Over Rounds')
+plt.grid(True)
+plt.legend()
+
+plt.subplot(3, 1, 3)
+plt.plot(rounds, upload_increases, marker='o', color='green', label='Upload Cost Increase')
+plt.xlabel('Round')
+plt.ylabel('Upload Cost Increase')
+plt.title('Upload Cost Increase Over Rounds')
+plt.grid(True)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
 
 print2('Training Complete')
