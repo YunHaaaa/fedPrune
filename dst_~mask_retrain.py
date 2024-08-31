@@ -247,8 +247,12 @@ class Client:
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
-
-                outputs = self.net(inputs, args.type_value)
+                
+                if epoch >= self.local_epochs * pruning_ratio:
+                    outputs = self.net(inputs, 2)
+                # TODO: type value 3, over 5
+                else:
+                    outputs = self.net(inputs, args.type_value)
                 loss = self.criterion(outputs, labels)
 
                 if args.prox > 0:
@@ -309,7 +313,7 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                outputs = _model(inputs, args.type_value)
+                outputs = _model(inputs, 2)
                 outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
                 total += len(labels)
