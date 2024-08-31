@@ -10,7 +10,6 @@ import time
 from copy import deepcopy
 
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 from datasets import get_dataset
 import models
@@ -243,21 +242,28 @@ class Client:
                 self.optimizer.step()
 
                 if epoch == self.local_epochs * pruning_ratio:
-                    self.apply_hard_mask()
+                    masked_weights = self.apply_hard_mask()
                 
                 running_loss += loss.item()
-
-        ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
 
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
         else:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+
+        with torch.no_grad():
+            for name, param in self.named_parameters():
+                if name in masked_weights:
+                    mask_name = name + '_mask'
+                    mask = self.state_dict()[mask_name].to(self.device)
+
+                    param.data[~mask] = masked_weights[name]
+
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
-        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
-        #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        # dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
+        # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         return ret
 
     def test(self, model=None, n_batches=0):
@@ -541,55 +547,24 @@ print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np
 print2()
 print2()
 
-accuracy_gains = []
-download_increases = []
-upload_increases = []
+accuracy_histories = []
+download_histories = []
+upload_histories = []
 
 
 for i in range(1, len(accuracy_history)):
-    accuracy_gain = (accuracy_history[i] - accuracy_history[i-1]) / accuracy_history[i-1]
-    download_increase = download_cost_history[i] - download_cost_history[i-1]
-    upload_increase = upload_cost_history[i] - upload_cost_history[i-1]
     
-    accuracy_gains.append(accuracy_gain * 100)  # 퍼센트로 변환
-    download_increases.append(download_increase)
-    upload_increases.append(upload_increase)
+    accuracy_histories.append(accuracy_history[i] * 100)  # 퍼센트로 변환
+    download_histories.append(download_cost_history[i])
+    upload_histories.append(upload_cost_history[i])
     
     print2(f'Round {i * args.eval_every}:')
-    print2(f'    Accuracy Gain: {accuracy_gain * 100:.2f}%')
-    print2(f'    Download Cost Increase: {download_increase}')
-    print2(f'    Upload Cost Increase: {upload_increase}')
+    print2(f'    Accuracy History: {accuracy_history[i] * 100:.2f}%')
+    print2(f'    Download Cost History: {download_cost_history[i]}')
+    print2(f'    Upload Cost History: {upload_cost_history[i]}')
     print2()
 
 rounds = list(range(1, len(accuracy_history)))  # 라운드 번호
 
-plt.figure(figsize=(14, 8))
-
-plt.subplot(3, 1, 1)
-plt.plot(rounds, accuracy_gains, marker='o', label='Accuracy Gain (%)')
-plt.xlabel('Round')
-plt.ylabel('Accuracy Gain (%)')
-plt.title('Accuracy Gain Over Rounds')
-plt.grid(True)
-plt.legend()
-
-plt.subplot(3, 1, 2)
-plt.plot(rounds, download_increases, marker='o', color='orange', label='Download Cost Increase')
-plt.xlabel('Round')
-plt.ylabel('Download Cost Increase')
-plt.title('Download Cost Increase Over Rounds')
-plt.grid(True)
-plt.legend()
-
-plt.subplot(3, 1, 3)
-plt.plot(rounds, upload_increases, marker='o', color='green', label='Upload Cost Increase')
-plt.xlabel('Round')
-plt.ylabel('Upload Cost Increase')
-plt.title('Upload Cost Increase Over Rounds')
-plt.grid(True)
-plt.legend()
-
-plt.tight_layout()
-plt.show()
 
 print2('Training Complete')

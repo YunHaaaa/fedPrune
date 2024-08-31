@@ -389,24 +389,30 @@ class PrunableNet(nn.Module):
                     del gpu_param
 
             self.load_state_dict(new_state)
+            
         return mask_changed
     
     def apply_hard_mask(self):
         """Apply the current mask to the network, setting masked weights to zero
         and ensuring no gradient updates are applied to masked weights."""
+        
+        masked_weights = {}
+        
         with torch.no_grad():
             for name, param in self.named_parameters():
                 mask_name = name + '_mask'
                 if mask_name in self.state_dict():
                     mask = self.state_dict()[mask_name].to(self.device)
                     param = param.to(self.device)
+                    
+                    masked_weights[name] = param.data[~mask].clone()
 
-                    # mask에서 0인 부분을 강제로 0으로 설정
                     param.data[~mask] = 0
 
-                    # mask된 부분에 대해서는 gradient를 흘리지 않도록 함
                     param.requires_grad = True
                     param.register_hook(lambda grad, mask=mask: grad * mask.float())
+                    
+        return masked_weights
 
 
     def proximal_loss(self, last_state):
