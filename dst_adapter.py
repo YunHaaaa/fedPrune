@@ -13,8 +13,8 @@ import csv
 from tqdm import tqdm
 
 from datasets import get_dataset
-import models
-from models import all_models, needs_mask, initialize_mask
+import adapter.models
+from adapter.models import all_models, needs_mask, initialize_mask
 
 def device_list(x):
     if x == 'cpu':
@@ -241,25 +241,28 @@ class Client:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
                 loss.backward()
                 self.optimizer.step()
-
-                if epoch == self.local_epochs * pruning_ratio:
-                    masked_weights = self.apply_hard_mask()
                 
                 running_loss += loss.item()
 
+            if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
+                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
+                # recompute gradient if we used FedProx penalty
+                self.optimizer.zero_grad()
+                outputs = self.net(inputs, 2)
+                self.criterion(outputs, labels).backward()
+
+                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+                
+                ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
+                
+            self.curr_epoch += 1
+            
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
         else:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
-
-            
-        # with torch.no_grad():
-        #     for name, param in self.net.named_parameters():
-        #         if name in masked_weights:
-        #             mask_name = name + '_mask'
-        #             mask = self.net.state_dict()[mask_name].to(self.device)
-        #             param.data[~mask] = masked_weights[name]
 
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
