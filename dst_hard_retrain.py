@@ -8,6 +8,7 @@ import os
 import sys
 import time
 from copy import deepcopy
+import csv
 
 from tqdm import tqdm
 
@@ -242,21 +243,28 @@ class Client:
                 self.optimizer.step()
 
                 if epoch == self.local_epochs * pruning_ratio:
-                    self.apply_hard_mask()
+                    masked_weights = self.apply_hard_mask()
                 
                 running_loss += loss.item()
-
-        ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
 
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
         else:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+
+            
+        # with torch.no_grad():
+        #     for name, param in self.net.named_parameters():
+        #         if name in masked_weights:
+        #             mask_name = name + '_mask'
+        #             mask = self.net.state_dict()[mask_name].to(self.device)
+        #             param.data[~mask] = masked_weights[name]
+
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
-        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
-        #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        # dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
+        # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         return ret
 
     def test(self, model=None, n_batches=0):
@@ -298,6 +306,10 @@ class Client:
 dprint('Initializing clients...')
 clients = {}
 client_ids = []
+
+accuracy_history = []
+download_cost_history = []
+upload_cost_history = []
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, net=all_models[args.dataset],
@@ -478,6 +490,10 @@ for server_round in tqdm(range(args.rounds)):
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
+        accuracy_history.append(np.mean(list(accuracies.values())))
+        download_cost_history.append(sum(download_cost))
+        upload_cost_history.append(sum(upload_cost))
+
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:
@@ -532,3 +548,21 @@ print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np
 print2()
 print2()
 
+filename = f"{args.outfile}.csv"
+
+with open(filename, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    
+    writer.writerow(['Round', 'Accuracy (%)', 'Download Cost', 'Upload Cost'])
+    
+    for i in range(1, len(accuracy_history)):
+        round_num = i * args.eval_every
+        accuracy = accuracy_history[i] * 100  # 퍼센트로 변환
+        download_cost = download_cost_history[i]
+        upload_cost = upload_cost_history[i]
+        
+        writer.writerow([round_num, accuracy, download_cost, upload_cost])
+
+print2('Training history saved to', filename)
+
+print2('Training Complete')
