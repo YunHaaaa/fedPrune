@@ -511,15 +511,15 @@ def conv3x3_nomax(in_channels, out_channels):
 
 
 class MNISTNet(PrunableNet):
-    def __init__(self):
+    def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(MNISTNet, self).__init__()
         
-        self.conv1 = conv3x3(1, 32)
-        self.conv2 = conv3x3(32, 64)
-        self.conv3 = conv3x3_nomax(64, 64)
+        self.conv1 = conv3x3(in_channels, hidden_size)
+        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
+        self.conv3 = conv3x3_nomax(hidden_size * 2, hidden_size * 2)
         
-        self.fc1 = nn.Linear(64 * 7 * 7, 128)
-        self.fc2 = nn.Linear(128, 10)
+        self.fc1 = nn.Linear(hidden_size * 2 * wh_size * wh_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, out_features)
         
         self.init_param_sizes()
     
@@ -538,17 +538,17 @@ class MNISTNet(PrunableNet):
 
 
 class CIFAR10Net(PrunableNet):
-    def __init__(self):
+    def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(CIFAR10Net, self).__init__()
         
-        self.conv1 = conv3x3(3, 64)
-        self.conv2 = conv3x3(64, 128)
-        self.conv3 = conv3x3(128, 256)
-        self.conv4 = conv3x3_nomax(256, 256)
+        self.conv1 = conv3x3(in_channels, hidden_size)
+        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
+        self.conv3 = conv3x3(hidden_size * 2, hidden_size * 4)
+        self.conv4 = conv3x3_nomax(hidden_size * 4, hidden_size * 4)
         
-        self.fc1 = nn.Linear(256 * 4 * 4, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 10)
+        self.fc1 = nn.Linear(hidden_size * 4 * wh_size * wh_size, hidden_size * 4)
+        self.fc2 = nn.Linear(hidden_size * 4, hidden_size * 2)
+        self.fc3 = nn.Linear(hidden_size * 2, out_features)
         
         self.init_param_sizes()
     
@@ -569,16 +569,16 @@ class CIFAR10Net(PrunableNet):
 
 
 class CIFAR100Net(PrunableNet):
-    def __init__(self):
+    def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(CIFAR100Net, self).__init__()
         
-        self.conv1 = conv3x3(3, 64)
-        self.conv2 = conv3x3(64, 128)
-        self.conv3 = conv3x3(128, 256)
-        self.conv4 = conv3x3_nomax(256, 256)
+        self.conv1 = conv3x3(in_channels, hidden_size)
+        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
+        self.conv3 = conv3x3(hidden_size * 2, hidden_size * 4)
+        self.conv4 = conv3x3_nomax(hidden_size * 4, hidden_size * 4)
         
-        self.fc1 = nn.Linear(256 * 4 * 4, 512)
-        self.fc2 = nn.Linear(512, 100)
+        self.fc1 = nn.Linear(hidden_size * 4 * wh_size * wh_size, hidden_size * 8)
+        self.fc2 = nn.Linear(hidden_size * 8, out_features)
         
         self.init_param_sizes()
     
@@ -598,15 +598,15 @@ class CIFAR100Net(PrunableNet):
     
 
 class EMNISTNet(PrunableNet):
-    def __init__(self):
+    def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(EMNISTNet, self).__init__()
         
-        self.conv1 = conv3x3(1, 32)
-        self.conv2 = conv3x3(32, 64)
-        self.conv3 = conv3x3_nomax(64, 64)
+        self.conv1 = conv3x3(in_channels, hidden_size)
+        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
+        self.conv3 = conv3x3_nomax(hidden_size * 2, hidden_size * 2)
         
-        self.fc1 = nn.Linear(64 * 7 * 7, 256)
-        self.fc2 = nn.Linear(256, 62)
+        self.fc1 = nn.Linear(hidden_size * 2 * wh_size * wh_size, hidden_size * 4)
+        self.fc2 = nn.Linear(hidden_size * 4, out_features)
         
         self.init_param_sizes()
     
@@ -625,15 +625,15 @@ class EMNISTNet(PrunableNet):
 
 
 class Conv2(PrunableNet):
-    def __init__(self):
+    def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(Conv2, self).__init__()
         
-        self.conv1 = conv3x3(1, 32)
-        self.conv2 = conv3x3(32, 64)
-        self.conv3 = conv3x3_nomax(64, 64)
+        self.conv1 = conv3x3(in_channels, hidden_size)
+        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
+        self.conv3 = conv3x3_nomax(hidden_size * 2, hidden_size * 2)
         
-        self.fc1 = nn.Linear(64 * 7 * 7, 2048)
-        self.fc2 = nn.Linear(2048, 62)
+        self.fc1 = nn.Linear(hidden_size * 2 * wh_size * wh_size, 2048)
+        self.fc2 = nn.Linear(2048, out_features)
         
         self.init_param_sizes()
     
