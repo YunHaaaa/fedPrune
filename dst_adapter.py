@@ -36,6 +36,8 @@ parser.add_argument('--total-clients', type=int, help='split the dataset between
 parser.add_argument('--min-samples', type=int, default=0, help='minimum number of samples required to allow a client to participate')
 parser.add_argument('--samples-per-client', type=int, default=20, help='samples to allocate to each client (per class, for lotteryfl, or per client, for iid)')
 parser.add_argument('--prox', type=float, default=0, help='coefficient to proximal term (i.e. in FedProx)')
+parser.add_argument('--hidden-size', type=int, default=32, help='Number of channels for each convolutional layer (default: 64).')
+parser.add_argument('--num-ways', type=int, default=10, help='Number of classes per task (N in "N-way", default: 5).')
 
 # Pruning and regrowth options
 parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0 to 1')
@@ -131,6 +133,30 @@ def evaluate_local(clients, global_model, progress=False, n_batches=0):
 
     return accuracies, sparsities
 
+def load_model(args):
+
+    if args.dataset in ['mnist', 'emnist']:
+        wh_size = 7
+    elif args.dataset in ['cifar10', 'cifar100']:
+        wh_size = 4
+    else:
+        raise ValueError("Unsupported dataset type")
+
+    if args.dataset == 'mnist':
+        model = models.MNISTNet(in_channels=1, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+    elif args.dataset == 'emnist':
+        model = models.Conv2(in_channels=1, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+    elif args.dataset == 'cifar10':
+        model = models.CIFAR10Net(in_channels=3, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+    elif args.dataset == 'cifar100':
+        model = models.CIFAR100Net(in_channels=3, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+    else:
+        raise ValueError("Unsupported dataset type")
+
+    colearner_model = models.CoLearner(in_channels=args.hidden_size, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+
+    return model, colearner_model
+
 
 
 # Fetch and cache the dataset
@@ -143,7 +169,7 @@ loaders = get_dataset(args.dataset, clients=args.total_clients, mode=args.distri
 
 class Client:
 
-    def __init__(self, id, device, train_data, test_data, net=models.MNISTNet,
+    def __init__(self, id, device, train_data, test_data,
                  local_epochs=10, learning_rate=0.01, target_sparsity=0.1):
         '''Construct a new client.
 
@@ -167,8 +193,13 @@ class Client:
         self.train_data, self.test_data = train_data, test_data
 
         self.device = device
-        self.net = net(device=self.device).to(self.device)
+        
+        self.net, self.co_learner_net = load_model(args) 
+        self.net = self.net.to(self.device)
+        self.co_learner_net = self.co_learner_net.to(self.device)
+
         initialize_mask(self.net)
+        initialize_mask(self.co_learner_net)
         self.criterion = nn.CrossEntropyLoss()
 
         self.learning_rate = learning_rate
@@ -183,7 +214,7 @@ class Client:
 
     def reset_optimizer(self):
         self.optimizer = torch.optim.SGD(self.net.parameters(), lr=self.learning_rate, momentum=args.momentum, weight_decay=args.l2)
-
+        self.co_optimizer = torch.optim.SGD(self.co_learner_net.parameters(), lr=self.learning_rate, momentum=args.momentum, weight_decay=args.l2)
 
     def reset_weights(self, *args, **kwargs):
         return self.net.reset_weights(*args, **kwargs)
@@ -234,13 +265,23 @@ class Client:
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
+                self.co_optimizer.zero_grad()
 
-                outputs = self.net(inputs)
-                loss = self.criterion(outputs, labels)
+                features, logit = self.net(inputs)
+                _, co_logit = self.co_learner_net(features)
+
+                loss = self.criterion(logit, labels)
+                co_loss = self.criterion(co_logit, labels)
+                
                 if args.prox > 0:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
-                loss.backward()
+                    co_loss += args.prox / 2. * self.co_learner_net.proximal_loss(global_params)
+                
+                total_loss = loss + args.loss_scaling * co_loss
+                total_loss.backward()
+                
                 self.optimizer.step()
+                self.co_optimizer.step()
                 
                 running_loss += loss.item()
 
@@ -248,8 +289,8 @@ class Client:
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
-                outputs = self.net(inputs, 2)
-                self.criterion(outputs, labels).backward()
+                _, logit = self.net(inputs, 2)
+                self.criterion(logit, labels).backward()
 
                 self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
                 self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
@@ -281,11 +322,15 @@ class Client:
 
         if model is None:
             model = self.net
+            co_model = self.co_learner_net
             _model = self.net
+            _co_model = self.co_learner_net
         else:
             _model = model.to(self.device)
+            _co_model = co_model.to(self.device)
 
         _model.eval()
+        _co_model.eval()
         with torch.no_grad():
             for i, (inputs, labels) in enumerate(self.test_data):
                 if i > n_batches and n_batches > 0:
@@ -293,16 +338,25 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                outputs = _model(inputs)
-                outputs = torch.argmax(outputs, dim=-1)
+
+                feature, logit = _model(inputs)
+                _, co_logit = _co_model(feature)
+
+                outputs = torch.argmax(logit, dim=-1)
+                co_outputs = torch.argmax(co_logit, dim=-1)
+
                 correct += sum(labels == outputs)
+                co_correct += sum(labels == co_outputs)
+
                 total += len(labels)
 
         # remove copies if needed
         if model is not _model:
             del _model
+        if co_model is not _co_model:
+            del _co_model
 
-        return correct / total
+        return (correct + co_correct) / (total * 2)
 
 
 # initialize clients
@@ -315,17 +369,17 @@ download_cost_history = []
 upload_cost_history = []
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
-    cl = Client(client_id, *client_loaders, net=all_models[args.dataset],
-                learning_rate=args.eta, local_epochs=args.epochs,
-                target_sparsity=args.sparsity)
+    cl = Client(client_id, device, *client_loaders, local_epochs=args.epochs,
+                learning_rate=args.eta, target_sparsity=args.sparsity)
+
     clients[client_id] = cl
     client_ids.append(client_id)
     torch.cuda.empty_cache()
 
 # initialize global model
-global_model = all_models[args.dataset](device='cpu')
+global_model, _ = load_model(args)
+global_model = global_model.to('cpu')
 initialize_mask(global_model)
-
 
 global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution)
 
