@@ -13,7 +13,7 @@ import csv
 from tqdm import tqdm
 
 from datasets import get_dataset
-import adapter.models
+import adapter.models as models
 from adapter.models import all_models, needs_mask, initialize_mask
 
 def device_list(x):
@@ -369,7 +369,7 @@ download_cost_history = []
 upload_cost_history = []
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
-    cl = Client(client_id, device, *client_loaders, local_epochs=args.epochs,
+    cl = Client(client_id, *client_loaders, local_epochs=args.epochs,
                 learning_rate=args.eta, target_sparsity=args.sparsity)
 
     clients[client_id] = cl
