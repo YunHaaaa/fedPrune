@@ -26,7 +26,7 @@ def initialize_mask(model, dtype=torch.bool):
                         'Parameter has a pruning mask already. '
                         'Reinitialize to an all-one mask.'
                     )
-                layer.register_buffer(name + '_mask', torch.ones_like(param, dtype=dtype))
+                layer.register_buffer(name.replace('.', '_') + '_mask', torch.ones_like(param, dtype=dtype))
                 continue
                 parent = name[:name.rfind('.')]
 
