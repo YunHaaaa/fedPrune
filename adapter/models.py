@@ -88,24 +88,20 @@ class PrunableNet(nn.Module):
         if t >= t_end:
             return 0
         return alpha/2 * (1 + np.cos(t*np.pi / t_end))
-
-
+    
     def _weights_by_layer(self, sparsity=0.1, sparsity_distribution='erk'):
         with torch.no_grad():
             layer_names = []
             sparsities = np.empty(len(list(self.named_children())))
             n_weights = np.zeros_like(sparsities, dtype=int)
 
-            for i, (name, layer) in enumerate(self.named_children()):
-
+            def process_layer(name, layer, i):
+                nonlocal sparsities, n_weights, layer_names
+                
                 layer_names.append(name)
                 for pname, param in layer.named_parameters():
                     n_weights[i] += param.numel()
 
-                if sparsity_distribution == 'uniform':
-                    sparsities[i] = sparsity
-                    continue
-                
                 kernel_size = None
                 if isinstance(layer, nn.modules.conv._ConvNd):
                     neur_out = layer.out_channels
@@ -126,10 +122,19 @@ class PrunableNet(nn.Module):
                         sparsities[i] = 1 - (neur_in + neur_out) / (neur_in * neur_out)
                 else:
                     raise ValueError('Unsupported sparsity distribution ' + sparsity_distribution)
-                
-            # Now we need to renormalize sparsities.
-            # We need global sparsity S = sum(s * n) / sum(n) equal to desired
-            # sparsity, and s[i] = C n[i]
+
+            i = 0
+            for name, layer in self.named_children():
+                if isinstance(layer, nn.Sequential):
+                    # Sequential의 각 레이어를 처리
+                    for sub_name, sub_layer in layer.named_children():
+                        process_layer(f"{name}.{sub_name}", sub_layer, i)
+                        i += 1
+                else:
+                    process_layer(name, layer, i)
+                    i += 1
+
+            # sparsities 재조정
             sparsities *= sparsity * np.sum(n_weights) / np.sum(sparsities * n_weights)
             n_weights = np.floor((1-sparsities) * n_weights)
 
