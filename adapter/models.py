@@ -115,7 +115,7 @@ class PrunableNet(nn.Module):
                     neur_out = layer.out_features
                     neur_in = layer.in_features
                 else:
-                    raise ValueError('Unsupported layer type ' + type(layer))
+                    raise ValueError('Unsupported layer type ' + str(type(layer)))
 
                 if sparsity_distribution == 'er':
                     sparsities[i] = 1 - (neur_in + neur_out) / (neur_in * neur_out)
