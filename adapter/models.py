@@ -317,7 +317,7 @@ class PrunableNet(nn.Module):
 
         with torch.no_grad():
             mask_changed = False
-            local_state = self.state_dict()
+            local_state = {k: v.to(self.device) for k, v in self.state_dict().items()}  # local_state를 device로 이동
 
             # If no global parameters were specified, that just means we should
             # apply the local mask, so the local state should be used as the
@@ -332,12 +332,12 @@ class PrunableNet(nn.Module):
             if use_global_mask:
                 apply_mask_source = param_source
             else:
-                apply_mask_source = {k: v.to(self.device) for k, v in local_state.items()}  # local_state를 device로 이동
+                apply_mask_source = local_state
 
             # We may wish to apply the global mask to the global parameters,
             # but not overwrite the local mask with it.
             if global_communication_mask:
-                copy_mask_source = {k: v.to(self.device) for k, v in local_state.items()}  # local_state를 device로 이동
+                copy_mask_source = local_state
             else:
                 copy_mask_source = apply_mask_source
 
@@ -349,11 +349,11 @@ class PrunableNet(nn.Module):
             # Copy over the params, masking them off if needed.
             for name, param in param_source.items():
                 if name.endswith('_mask'):
-                    # skip masks, since we will copy them with their corresponding
+                    # Skip masks, since we will copy them with their corresponding
                     # layers, from the mask source.
                     continue
 
-                new_state[name] = local_state[name].to(self.device)  # local_state도 device로 이동
+                new_state[name] = local_state[name]
 
                 mask_name = name + '_mask'
                 if needs_mask(name) and mask_name in apply_mask_source:
@@ -363,34 +363,32 @@ class PrunableNet(nn.Module):
                     param = param.to(self.device)
                     gpu_param = param[mask_to_apply].to(self.device)
 
-                    # copy weights provided by the weight source, where the mask
-                    # permits them to be copied
+                    # Copy weights provided by the weight source, where the mask permits them to be copied
                     new_state[name][mask_to_apply] = gpu_param
 
                     # Don't bother allocating a *new* mask if not needed
                     if mask_name in local_state:
-                        new_state[mask_name] = local_state[mask_name].to(self.device)
+                        new_state[mask_name] = local_state[mask_name]
 
-                    new_state[mask_name].copy_(mask_to_copy)  # copy mask from mask_source into this model's mask
+                    new_state[mask_name].copy_(mask_to_copy)  # Copy mask from mask_source into this model's mask
 
-                    # what do we do with shadowed weights?
+                    # If not keeping local masked weights, set the masked-out weights to zero
                     if not keep_local_masked_weights:
                         new_state[name][~mask_to_apply] = 0
 
-                    if mask_name not in local_state or not torch.equal(local_state[mask_name], mask_to_copy):
+                    # Check for mask changes, ensuring all tensors are on the same device
+                    if mask_name not in local_state or not torch.equal(local_state[mask_name].to(self.device), mask_to_copy):
                         mask_changed = True
                 else:
-                    # biases and other unmasked things
+                    # Biases and other unmasked things, move them to the correct device
                     gpu_param = param.to(self.device)
                     new_state[name].copy_(gpu_param)
 
-                # clean up copies made to gpu
-                if gpu_param.data_ptr() != param.data_ptr():
-                    del gpu_param
-
+            # Load the modified state dict back into the model
             self.load_state_dict(new_state)
-            
+
         return mask_changed
+        
     
     def apply_hard_mask(self):
         """Apply the current mask to the network, setting masked weights to zero
