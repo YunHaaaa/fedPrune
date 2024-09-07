@@ -41,7 +41,7 @@ class PrunableNet(nn.Module):
 
     def __init__(self, device='cpu'):
         super(PrunableNet, self).__init__()
-        self.device = device
+        self.device = torch.device(device)
 
         self.communication_sparsity = 0
 
@@ -325,19 +325,19 @@ class PrunableNet(nn.Module):
             if global_state is None:
                 param_source = local_state
             else:
-                param_source = global_state
+                param_source = {k: v.to(self.device) for k, v in global_state.items()}  # global_state를 device로 이동
 
             # We may wish to apply the global parameters but use the local mask.
             # In these cases, we will use the local state as the mask source.
             if use_global_mask:
-                apply_mask_source = global_state
+                apply_mask_source = param_source
             else:
-                apply_mask_source = local_state
+                apply_mask_source = {k: v.to(self.device) for k, v in local_state.items()}  # local_state를 device로 이동
 
             # We may wish to apply the global mask to the global parameters,
             # but not overwrite the local mask with it.
             if global_communication_mask:
-                copy_mask_source = local_state
+                copy_mask_source = {k: v.to(self.device) for k, v in local_state.items()}  # local_state를 device로 이동
             else:
                 copy_mask_source = apply_mask_source
 
@@ -353,13 +353,13 @@ class PrunableNet(nn.Module):
                     # layers, from the mask source.
                     continue
 
-                new_state[name] = local_state[name]
+                new_state[name] = local_state[name].to(self.device)  # local_state도 device로 이동
 
                 mask_name = name + '_mask'
                 if needs_mask(name) and mask_name in apply_mask_source:
 
-                    mask_to_apply = apply_mask_source[mask_name].to(device=self.device, dtype=torch.bool)
-                    mask_to_copy = copy_mask_source[mask_name].to(device=self.device, dtype=torch.bool)
+                    mask_to_apply = apply_mask_source[mask_name].to(self.device, dtype=torch.bool)
+                    mask_to_copy = copy_mask_source[mask_name].to(self.device, dtype=torch.bool)
                     param = param.to(self.device)
                     gpu_param = param[mask_to_apply].to(self.device)
 
@@ -369,9 +369,9 @@ class PrunableNet(nn.Module):
 
                     # Don't bother allocating a *new* mask if not needed
                     if mask_name in local_state:
-                        new_state[mask_name] = local_state[mask_name] 
+                        new_state[mask_name] = local_state[mask_name].to(self.device)
 
-                    new_state[mask_name].copy_(mask_to_copy) # copy mask from mask_source into this model's mask
+                    new_state[mask_name].copy_(mask_to_copy)  # copy mask from mask_source into this model's mask
 
                     # what do we do with shadowed weights?
                     if not keep_local_masked_weights:
