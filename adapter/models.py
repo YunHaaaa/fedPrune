@@ -490,47 +490,52 @@ class PrunableNet(nn.Module):
         return 1 - (n_ones / mask_size).item()
 
 
+    def num_flat_features(self, x):
+        size = x.size()[1:]  # 모든 차원에서 batch 크기를 제외한 부분
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features
+        
+
 #############################
 # Subclasses of PrunableNet #
 #############################
 
+
 class MNISTNet(PrunableNet):
+    def __init__(self, in_channels=1, out_features=50, hidden_size=[10, 20], wh_size=16, num_classes=10):
+        super(MNISTNet, self).__init__()
 
-    def __init__(self, *args, **kwargs):
-        super(MNISTNet, self).__init__(*args, **kwargs)
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5)
+        self.conv2 = nn.Conv2d(hidden_size[0], hidden_size[1], 5)
 
-        self.conv1 = nn.Conv2d(1, 10, 5) # "Conv 1-10"
-        self.conv2 = nn.Conv2d(10, 20, 5) # "Conv 10-20"
-
-        self.fc1 = nn.Linear(20 * 16 * 16, 50)
-        self.fc2 = nn.Linear(50, 10)
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc2 = nn.Linear(out_features, num_classes)
 
         self.init_param_sizes()
-
 
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
-        x = x.view(-1, self.num_flat_features(x)) # flatten
+        x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         x = F.softmax(self.fc2(x), dim=1)
         return x
 
 
 class CIFAR10Net(PrunableNet):
+    def __init__(self, in_channels=3, out_features=120, hidden_size=[6, 16], wh_size=20, num_classes=10):
+        super(CIFAR10Net, self).__init__()
 
-    def __init__(self, *args, **kwargs):
-        super(CIFAR10Net, self).__init__(*args, **kwargs)
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5)
+        self.conv2 = nn.Conv2d(hidden_size[0], hidden_size[1], 5)
 
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-
-        self.fc1 = nn.Linear(16 * 20 * 20, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc2 = nn.Linear(out_features, 84)
+        self.fc3 = nn.Linear(84, num_classes)
 
         self.init_param_sizes()
-
 
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
@@ -543,18 +548,16 @@ class CIFAR10Net(PrunableNet):
 
 
 class CIFAR100Net(PrunableNet):
+    def __init__(self, in_channels=3, out_features=120, hidden_size=[6, 16], wh_size=20, num_classes=100):
+        super(CIFAR100Net, self).__init__()
 
-    def __init__(self, *args, **kwargs):
-        super(CIFAR100Net, self).__init__(*args, **kwargs)
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5)
+        self.conv2 = nn.Conv2d(hidden_size[0], hidden_size[1], 5)
 
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-
-        self.fc1 = nn.Linear(16 * 20 * 20, 120)
-        self.fc2 = nn.Linear(120, 100)
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc2 = nn.Linear(out_features, num_classes)
 
         self.init_param_sizes()
-
 
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
@@ -563,47 +566,19 @@ class CIFAR100Net(PrunableNet):
         x = F.relu(self.fc1(x))
         x = F.softmax(self.fc2(x), dim=1)
         return x
-    
-
-class EMNISTNet(PrunableNet):
-
-    def __init__(self, *args, **kwargs):
-        super(EMNISTNet, self).__init__(*args, **kwargs)
-
-        self.conv1 = nn.Conv2d(1, 10, 5) # "Conv 1-10"
-        self.conv2 = nn.Conv2d(10, 20, 5) # "Conv 10-20"
-
-        self.fc1 = nn.Linear(20 * 16 * 16, 512)
-        self.fc2 = nn.Linear(512, 62)
-
-        self.init_param_sizes()
-
-
-    def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
-        x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
-        x = x.view(-1, self.num_flat_features(x)) # flatten
-        x = F.relu(self.fc1(x))
-        x = F.softmax(self.fc2(x), dim=1)
-        return x
 
 
 class Conv2(PrunableNet):
-    '''The EMNIST model from LEAF:
-    https://github.com/TalwalkarLab/leaf/blob/master/models/femnist/cnn.py
-    '''
+    def __init__(self, in_channels=1, out_features=2048, hidden_size=[32, 64], wh_size=7, num_classes=62):
+        super(Conv2, self).__init__()
 
-    def __init__(self, *args, **kwargs):
-        super(Conv2, self).__init__(*args, **kwargs)
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5, padding=2)
+        self.conv2 = nn.Conv2d(hidden_size[0], hidden_size[1], 5, padding=2)
 
-        self.conv1 = nn.Conv2d(1, 32, 5, padding=2)
-        self.conv2 = nn.Conv2d(32, 64, 5, padding=2)
-
-        self.fc1 = nn.Linear(64 * 7 * 7, 2048)
-        self.fc2 = nn.Linear(2048, 62)
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc2 = nn.Linear(out_features, num_classes)
 
         self.init_param_sizes()
-
 
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 2, stride=2))
@@ -634,6 +609,7 @@ class CoLearner(nn.Module):
         logits = self.fixed_cls(features)
         
         return features, logits
+
 
 all_models = {
         'mnist': MNISTNet,
