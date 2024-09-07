@@ -606,16 +606,16 @@ class CoLearner(nn.Module):
         super(CoLearner, self).__init__()
         
         # Co-learner
-        self.conv1 = nn.Conv2d(in_channels, hidden_size, 5)
-        self.conv2 = nn.Conv2d(hidden_size, hidden_size, 5)
-        self.fc1 = nn.Linear(hidden_size * wh_size * wh_size, out_features)
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5)
+        self.conv2 = nn.Conv2d(hidden_size[1], hidden_size[1], 5)
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
 
     def forward(self, inputs):
         x = F.relu(F.max_pool2d(self.conv1(inputs), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         x = x.view(-1, self.num_flat_features(x))
         features = x
-        
+
         logits = self.fc1(x)
 
         return features, logits
