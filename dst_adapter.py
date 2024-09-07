@@ -36,8 +36,9 @@ parser.add_argument('--total-clients', type=int, help='split the dataset between
 parser.add_argument('--min-samples', type=int, default=0, help='minimum number of samples required to allow a client to participate')
 parser.add_argument('--samples-per-client', type=int, default=20, help='samples to allocate to each client (per class, for lotteryfl, or per client, for iid)')
 parser.add_argument('--prox', type=float, default=0, help='coefficient to proximal term (i.e. in FedProx)')
-parser.add_argument('--hidden-size', type=int, default=32, help='Number of channels for each convolutional layer (default: 64).')
+parser.add_argument('--hidden-size', nargs='+', type=int, default=32, help='Number of channels for each convolutional layer (default: 64).')
 parser.add_argument('--num-ways', type=int, default=10, help='Number of classes per task (N in "N-way", default: 5).')
+parser.add_argument('--wh-size', type=int, default=7, help='Size of the hidden layer in the network (default: 7).')
 
 # Pruning and regrowth options
 parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0 to 1')
