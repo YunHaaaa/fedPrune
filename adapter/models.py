@@ -519,9 +519,12 @@ class MNISTNet(PrunableNet):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         x = x.view(-1, self.num_flat_features(x))
+        feature = x
+
         x = F.relu(self.fc1(x))
-        x = F.softmax(self.fc2(x), dim=1)
-        return x
+        logits = self.fc2(x)
+
+        return feature, logits
 
 
 class CIFAR10Net(PrunableNet):
@@ -541,10 +544,13 @@ class CIFAR10Net(PrunableNet):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         x = x.view(-1, self.num_flat_features(x))
+        feature = x
+
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = F.softmax(self.fc3(x), dim=1)
-        return x
+        logits = self.fc3(x)
+
+        return feature, logits
 
 
 class CIFAR100Net(PrunableNet):
@@ -563,9 +569,12 @@ class CIFAR100Net(PrunableNet):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         x = x.view(-1, self.num_flat_features(x))
+        feature = x
+
         x = F.relu(self.fc1(x))
-        x = F.softmax(self.fc2(x), dim=1)
-        return x
+        logits = self.fc2(x)
+
+        return feature, logits
 
 
 class Conv2(PrunableNet):
@@ -584,30 +593,31 @@ class Conv2(PrunableNet):
         x = F.relu(F.max_pool2d(self.conv1(x), 2, stride=2))
         x = F.relu(F.max_pool2d(self.conv2(x), 2, stride=2))
         x = x.view(-1, self.num_flat_features(x))
+        feature = x
+
         x = F.relu(self.fc1(x))
-        x = F.softmax(self.fc2(x), dim=1)
-        return x
+        logits = self.fc2(x)
+
+        return feature, logits
 
 
 class CoLearner(nn.Module):
     def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(CoLearner, self).__init__()
-        self.in_channels = in_channels
-        self.out_features = out_features
-        self.hidden_size = hidden_size
         
         # Co-learner
-        self.fixed_conv1 = conv3x3_nomax(in_channels, hidden_size)
-        self.fixed_conv2 = conv3x3(hidden_size, hidden_size)
-        self.fixed_cls = nn.Linear(hidden_size * wh_size * wh_size, out_features)
+        self.conv1 = nn.Conv2d(in_channels, hidden_size, 5)
+        self.conv2 = nn.Conv2d(hidden_size, hidden_size, 5)
+        self.fc1 = nn.Linear(hidden_size * wh_size * wh_size, out_features)
 
     def forward(self, inputs):
-        features = self.fixed_conv1(inputs)
-        features = self.fixed_conv2(features)
-       
-        features = features.view((features.size(0), -1))
-        logits = self.fixed_cls(features)
+        x = F.relu(F.max_pool2d(self.conv1(inputs), 3, stride=1))
+        x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
+        x = x.view(-1, self.num_flat_features(x))
+        features = x
         
+        logits = self.fc1(x)
+
         return features, logits
 
 
