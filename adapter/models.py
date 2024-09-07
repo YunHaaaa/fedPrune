@@ -606,7 +606,7 @@ class CoLearner(nn.Module):
         super(CoLearner, self).__init__()
         
         # Co-learner
-        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5)
+        self.conv1 = nn.Conv2d(in_channels[0], hidden_size[0], 5)
         self.conv2 = nn.Conv2d(hidden_size[1], hidden_size[1], 5)
         self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
 
