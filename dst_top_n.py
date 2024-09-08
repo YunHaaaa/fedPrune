@@ -68,7 +68,7 @@ parser.add_argument('--no-eval', default=True, action='store_false', dest='eval'
 parser.add_argument('--grasp', default=False, action='store_true')
 parser.add_argument('--fp16', default=False, action='store_true', help='upload as fp16')
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
-
+parser.add_argument('--top_n', default = 10, type = int, help = 'ratio n')
 
 args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
@@ -203,21 +203,29 @@ class Client:
         self.optimizer = torch.optim.SGD(self.net.parameters(), lr=self.learning_rate, momentum=args.momentum, weight_decay=args.l2)
     
     def exclude_top_n_weights(self):
-        # Calculate the importance of weights and exclude top-n weights
-        # Example: using absolute values of weights for importance
-        weight_importance = {}
-        for name, param in self.net.named_parameters():
-            if 'weight' in name and not name.endswith('_mask'):
-                weight_importance[name] = torch.abs(param.data).sum().item()
+    # Calculate the importance of each weight
+    weight_importance = []
+    for name, param in self.net.named_parameters():
+        if 'weight' in name and not name.endswith('_mask'):
+            # Flatten the weight tensor to get individual weight values
+            flat_weights = param.data.view(-1)
+            for i, weight in enumerate(flat_weights):
+                weight_importance.append((name, i, torch.abs(weight).item()))
 
-        # Sort weights by importance and get top-n names
-        sorted_weights = sorted(weight_importance.items(), key=lambda x: x[1], reverse=True)
-        top_n_weights = [name for name, _ in sorted_weights[:self.args.top_n]]
+    # Sort all weights by their importance
+    sorted_weights = sorted(weight_importance, key=lambda x: x[2], reverse=True)
 
-        # Exclude gradients for top-n weights
-        for name, param in self.net.named_parameters():
-            if name in top_n_weights:
-                param.requires_grad = False  # Prevent gradients for this parameter
+    # Get the top-n% weights
+    total_weights = len(sorted_weights)
+    top_n_count = int(total_weights * (self.args.top_n / 100))
+    top_n_weights = sorted_weights[:top_n_count]
+
+    # Exclude gradients for top-n% weights
+    for name, idx, _ in top_n_weights:
+        for n, param in self.net.named_parameters():
+            if n == name:
+                param_flat = param.view(-1)
+                param_flat[idx].requires_grad = False
 
     def reset_weights(self, *args, **kwargs):
         return self.net.reset_weights(*args, **kwargs)
