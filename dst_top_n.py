@@ -268,12 +268,14 @@ class Client:
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
 
+                self.exclude_top_n_weights()
+                
                 outputs = self.net(inputs)
                 loss = self.criterion(outputs, labels)
                 if args.prox > 0:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
                 
-                self.exclude_top_n_weights()
+                
                 loss.backward()
                 self.optimizer.step()
                 # mask_params = {key: value for key, value in global_params.items() if key.endswith('_mask')}
