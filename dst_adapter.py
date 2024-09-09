@@ -45,6 +45,7 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
+parser.add_argument('--pruning-begin', type=int, default=9, help='first epoch number when we should readjust')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
@@ -65,6 +66,7 @@ parser.add_argument('--no-eval', default=True, action='store_false', dest='eval'
 parser.add_argument('--fp16', default=False, action='store_true', help='upload as fp16')
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
 parser.add_argument('--seed', default=42, type=int, help='random seed')
+parser.add_argument('--loss-scaling', type=float, default=1.0, help='Loss scaling factor for Co-learner (default: 1.0).')
 
 args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
@@ -209,6 +211,7 @@ class Client:
         self.reset_optimizer()
 
         self.local_epochs = local_epochs
+        self.curr_epoch = 0
 
         # save the initial global params given to us by the server
         # for LTH pruning later.
