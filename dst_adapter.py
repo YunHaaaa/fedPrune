@@ -144,13 +144,13 @@ def load_model(args):
         raise ValueError("Unsupported dataset type")
 
     if args.dataset == 'mnist':
-        model = models.MNISTNet(in_channels=1, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+        model = models.MNISTNet(in_channels=1, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
     elif args.dataset == 'emnist':
-        model = models.Conv2(in_channels=1, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+        model = models.Conv2(in_channels=1, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
     elif args.dataset == 'cifar10':
-        model = models.CIFAR10Net(in_channels=3, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+        model = models.CIFAR10Net(in_channels=3, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
     elif args.dataset == 'cifar100':
-        model = models.CIFAR100Net(in_channels=3, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+        model = models.CIFAR100Net(in_channels=3, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
     else:
         raise ValueError("Unsupported dataset type")
 

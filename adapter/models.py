@@ -488,14 +488,6 @@ class PrunableNet(nn.Module):
         return 1 - (n_ones / mask_size).item()
 
 
-    def num_flat_features(self, x):
-        size = x.size()[1:]  # 모든 차원에서 batch 크기를 제외한 부분
-        num_features = 1
-        for s in size:
-            num_features *= s
-        return num_features
-        
-
 #############################
 # Subclasses of PrunableNet #
 #############################
