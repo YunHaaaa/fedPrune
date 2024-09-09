@@ -41,7 +41,7 @@ class PrunableNet(nn.Module):
 
     def __init__(self, device='cpu'):
         super(PrunableNet, self).__init__()
-        self.device = device
+        self.device = torch.device(device)
 
         self.communication_sparsity = 0
 
@@ -317,7 +317,7 @@ class PrunableNet(nn.Module):
 
         with torch.no_grad():
             mask_changed = False
-            local_state = self.state_dict()
+            local_state = {k: v.to(self.device) for k, v in self.state_dict().items()}  # local_state를 device로 이동
 
             # If no global parameters were specified, that just means we should
             # apply the local mask, so the local state should be used as the
@@ -325,12 +325,12 @@ class PrunableNet(nn.Module):
             if global_state is None:
                 param_source = local_state
             else:
-                param_source = global_state
+                param_source = {k: v.to(self.device) for k, v in global_state.items()}  # global_state를 device로 이동
 
             # We may wish to apply the global parameters but use the local mask.
             # In these cases, we will use the local state as the mask source.
             if use_global_mask:
-                apply_mask_source = global_state
+                apply_mask_source = param_source
             else:
                 apply_mask_source = local_state
 
@@ -349,7 +349,7 @@ class PrunableNet(nn.Module):
             # Copy over the params, masking them off if needed.
             for name, param in param_source.items():
                 if name.endswith('_mask'):
-                    # skip masks, since we will copy them with their corresponding
+                    # Skip masks, since we will copy them with their corresponding
                     # layers, from the mask source.
                     continue
 
@@ -358,39 +358,37 @@ class PrunableNet(nn.Module):
                 mask_name = name + '_mask'
                 if needs_mask(name) and mask_name in apply_mask_source:
 
-                    mask_to_apply = apply_mask_source[mask_name].to(device=self.device, dtype=torch.bool)
-                    mask_to_copy = copy_mask_source[mask_name].to(device=self.device, dtype=torch.bool)
+                    mask_to_apply = apply_mask_source[mask_name].to(self.device, dtype=torch.bool)
+                    mask_to_copy = copy_mask_source[mask_name].to(self.device, dtype=torch.bool)
                     param = param.to(self.device)
                     gpu_param = param[mask_to_apply].to(self.device)
 
-                    # copy weights provided by the weight source, where the mask
-                    # permits them to be copied
+                    # Copy weights provided by the weight source, where the mask permits them to be copied
                     new_state[name][mask_to_apply] = gpu_param
 
                     # Don't bother allocating a *new* mask if not needed
                     if mask_name in local_state:
-                        new_state[mask_name] = local_state[mask_name] 
+                        new_state[mask_name] = local_state[mask_name]
 
-                    new_state[mask_name].copy_(mask_to_copy) # copy mask from mask_source into this model's mask
+                    new_state[mask_name].copy_(mask_to_copy)  # Copy mask from mask_source into this model's mask
 
-                    # what do we do with shadowed weights?
+                    # If not keeping local masked weights, set the masked-out weights to zero
                     if not keep_local_masked_weights:
                         new_state[name][~mask_to_apply] = 0
 
-                    if mask_name not in local_state or not torch.equal(local_state[mask_name], mask_to_copy):
+                    # Check for mask changes, ensuring all tensors are on the same device
+                    if mask_name not in local_state or not torch.equal(local_state[mask_name].to(self.device), mask_to_copy):
                         mask_changed = True
                 else:
-                    # biases and other unmasked things
+                    # Biases and other unmasked things, move them to the correct device
                     gpu_param = param.to(self.device)
                     new_state[name].copy_(gpu_param)
 
-                # clean up copies made to gpu
-                if gpu_param.data_ptr() != param.data_ptr():
-                    del gpu_param
-
+            # Load the modified state dict back into the model
             self.load_state_dict(new_state)
-            
+
         return mask_changed
+        
     
     def apply_hard_mask(self):
         """Apply the current mask to the network, setting masked weights to zero
@@ -494,183 +492,124 @@ class PrunableNet(nn.Module):
 # Subclasses of PrunableNet #
 #############################
 
-def conv3x3(in_channels, out_channels):
-    return nn.Sequential(
-        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-        nn.BatchNorm2d(out_channels),
-        nn.ReLU(),
-        nn.MaxPool2d(2)
-    )
-
-def conv3x3_nomax(in_channels, out_channels):
-    return nn.Sequential(
-        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-        nn.BatchNorm2d(out_channels),
-        nn.ReLU()
-    )
-
 
 class MNISTNet(PrunableNet):
-    def __init__(self, in_channels, out_features, hidden_size, wh_size):
+    def __init__(self, in_channels=1, out_features=50, hidden_size=[10, 20], wh_size=16, num_classes=10):
         super(MNISTNet, self).__init__()
-        
-        self.conv1 = conv3x3(in_channels, hidden_size)
-        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
-        self.conv3 = conv3x3_nomax(hidden_size * 2, hidden_size * 2)
-        
-        self.fc1 = nn.Linear(hidden_size * 2 * wh_size * wh_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, out_features)
-        
+
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5)
+        self.conv2 = nn.Conv2d(hidden_size[0], hidden_size[1], 5)
+
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc2 = nn.Linear(out_features, num_classes)
+
         self.init_param_sizes()
-    
-    def forward(self, x, params=None):
-        features = self.conv1(x)
-        features = self.conv2(features)
-        features = self.conv3(features)
-        
-        meta_features = F.max_pool2d(features, 2)
-        meta_features = meta_features.view(-1, self.num_flat_features(meta_features))
-        
-        logits = F.relu(self.fc1(meta_features))
-        logits = self.fc2(logits)
-        
-        return features, logits
+
+    def forward(self, x):
+        x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
+        x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
+        feature = x
+
+        x = x.view(-1, self.num_flat_features(x))
+        x = F.relu(self.fc1(x))
+        logits = self.fc2(x)
+
+        return feature, logits
 
 
 class CIFAR10Net(PrunableNet):
-    def __init__(self, in_channels, out_features, hidden_size, wh_size):
+    def __init__(self, in_channels=3, out_features=120, hidden_size=[6, 16], wh_size=20, num_classes=10):
         super(CIFAR10Net, self).__init__()
-        
-        self.conv1 = conv3x3(in_channels, hidden_size)
-        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
-        self.conv3 = conv3x3(hidden_size * 2, hidden_size * 4)
-        self.conv4 = conv3x3_nomax(hidden_size * 4, hidden_size * 4)
-        
-        self.fc1 = nn.Linear(hidden_size * 4 * wh_size * wh_size, hidden_size * 4)
-        self.fc2 = nn.Linear(hidden_size * 4, hidden_size * 2)
-        self.fc3 = nn.Linear(hidden_size * 2, out_features)
-        
+
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5)
+        self.conv2 = nn.Conv2d(hidden_size[0], hidden_size[1], 5)
+
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc2 = nn.Linear(out_features, 84)
+        self.fc3 = nn.Linear(84, num_classes)
+
         self.init_param_sizes()
-    
-    def forward(self, x, params=None):
-        features = self.conv1(x)
-        features = self.conv2(features)
-        features = self.conv3(features)
-        features = self.conv4(features)
-        
-        meta_features = F.max_pool2d(features, 2)
-        meta_features = meta_features.view(-1, self.num_flat_features(meta_features))
-        
-        logits = F.relu(self.fc1(meta_features))
-        logits = F.relu(self.fc2(logits))
-        logits = self.fc3(logits)
-        
-        return features, logits
+
+    def forward(self, x):
+        x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
+        x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
+        feature = x
+
+        x = x.view(-1, self.num_flat_features(x))
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        logits = self.fc3(x)
+
+        return feature, logits
 
 
 class CIFAR100Net(PrunableNet):
-    def __init__(self, in_channels, out_features, hidden_size, wh_size):
+    def __init__(self, in_channels=3, out_features=120, hidden_size=[6, 16], wh_size=20, num_classes=100):
         super(CIFAR100Net, self).__init__()
-        
-        self.conv1 = conv3x3(in_channels, hidden_size)
-        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
-        self.conv3 = conv3x3(hidden_size * 2, hidden_size * 4)
-        self.conv4 = conv3x3_nomax(hidden_size * 4, hidden_size * 4)
-        
-        self.fc1 = nn.Linear(hidden_size * 4 * wh_size * wh_size, hidden_size * 8)
-        self.fc2 = nn.Linear(hidden_size * 8, out_features)
-        
-        self.init_param_sizes()
-    
-    def forward(self, x, params=None):
-        features = self.conv1(x)
-        features = self.conv2(features)
-        features = self.conv3(features)
-        features = self.conv4(features)
-        
-        meta_features = F.max_pool2d(features, 2)
-        meta_features = meta_features.view(-1, self.num_flat_features(meta_features))
-        
-        logits = F.relu(self.fc1(meta_features))
-        logits = self.fc2(logits)
-        
-        return features, logits
-    
 
-class EMNISTNet(PrunableNet):
-    def __init__(self, in_channels, out_features, hidden_size, wh_size):
-        super(EMNISTNet, self).__init__()
-        
-        self.conv1 = conv3x3(in_channels, hidden_size)
-        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
-        self.conv3 = conv3x3_nomax(hidden_size * 2, hidden_size * 2)
-        
-        self.fc1 = nn.Linear(hidden_size * 2 * wh_size * wh_size, hidden_size * 4)
-        self.fc2 = nn.Linear(hidden_size * 4, out_features)
-        
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5)
+        self.conv2 = nn.Conv2d(hidden_size[0], hidden_size[1], 5)
+
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc2 = nn.Linear(out_features, num_classes)
+
         self.init_param_sizes()
-    
-    def forward(self, x, params=None):
-        features = self.conv1(x)
-        features = self.conv2(features)
-        features = self.conv3(features)
-        
-        meta_features = F.max_pool2d(features, 2)
-        meta_features = meta_features.view(-1, self.num_flat_features(meta_features))
-        
-        logits = F.relu(self.fc1(meta_features))
-        logits = self.fc2(logits)
-        
-        return features, logits
+
+    def forward(self, x):
+        x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
+        x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
+        feature = x
+
+        x = x.view(-1, self.num_flat_features(x))
+        x = F.relu(self.fc1(x))
+        logits = self.fc2(x)
+
+        return feature, logits
 
 
 class Conv2(PrunableNet):
-    def __init__(self, in_channels, out_features, hidden_size, wh_size):
+    def __init__(self, in_channels=1, out_features=2048, hidden_size=[32, 64], wh_size=7, num_classes=62):
         super(Conv2, self).__init__()
-        
-        self.conv1 = conv3x3(in_channels, hidden_size)
-        self.conv2 = conv3x3(hidden_size, hidden_size * 2)
-        self.conv3 = conv3x3_nomax(hidden_size * 2, hidden_size * 2)
-        
-        self.fc1 = nn.Linear(hidden_size * 2 * wh_size * wh_size, 2048)
-        self.fc2 = nn.Linear(2048, out_features)
-        
+
+        self.conv1 = nn.Conv2d(in_channels, hidden_size[0], 5, padding=2)
+        self.conv2 = nn.Conv2d(hidden_size[0], hidden_size[1], 5, padding=2)
+
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc2 = nn.Linear(out_features, num_classes)
+
         self.init_param_sizes()
-    
-    def forward(self, x, params=None):
-        features = self.conv1(x)
-        features = self.conv2(features)
-        features = self.conv3(features)
-        
-        meta_features = F.max_pool2d(features, 2)
-        meta_features = meta_features.view(-1, self.num_flat_features(meta_features))
-        
-        logits = F.relu(self.fc1(meta_features))
-        logits = self.fc2(logits)
-        
-        return features, logits
+
+    def forward(self, x):
+        x = F.relu(F.max_pool2d(self.conv1(x), 2, stride=2))
+        x = F.relu(F.max_pool2d(self.conv2(x), 2, stride=2))
+        feature = x
+
+        x = x.view(-1, self.num_flat_features(x))
+        x = F.relu(self.fc1(x))
+        logits = self.fc2(x)
+
+        return feature, logits
 
 
-class CoLearner(nn.Module):
+class CoLearner(PrunableNet):
     def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(CoLearner, self).__init__()
-        self.in_channels = in_channels
-        self.out_features = out_features
-        self.hidden_size = hidden_size
-        
+
         # Co-learner
-        self.fixed_conv1 = conv3x3_nomax(in_channels, hidden_size)
-        self.fixed_conv2 = conv3x3(hidden_size, hidden_size)
-        self.fixed_cls = nn.Linear(hidden_size * wh_size * wh_size, out_features)
+        self.conv1 = nn.Conv2d(in_channels=hidden_size[1], out_channels=hidden_size[1], kernel_size=5)
+        self.conv2 = nn.Conv2d(hidden_size[1], hidden_size[1], 5)
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size, out_features)
 
     def forward(self, inputs):
-        features = self.fixed_conv1(inputs)
-        features = self.fixed_conv2(features)
-       
-        features = features.view((features.size(0), -1))
-        logits = self.fixed_cls(features)
-        
+        x = F.relu(F.max_pool2d(self.conv1(inputs), 3, stride=1))
+        x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
+        x = x.view(-1, self.num_flat_features(x))
+        features = x
+
+        logits = self.fc1(x)
+
         return features, logits
+
 
 all_models = {
         'mnist': MNISTNet,

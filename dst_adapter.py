@@ -13,7 +13,7 @@ import csv
 from tqdm import tqdm
 
 from datasets import get_dataset
-import adapter.models
+import adapter.models as models
 from adapter.models import all_models, needs_mask, initialize_mask
 
 def device_list(x):
@@ -36,14 +36,17 @@ parser.add_argument('--total-clients', type=int, help='split the dataset between
 parser.add_argument('--min-samples', type=int, default=0, help='minimum number of samples required to allow a client to participate')
 parser.add_argument('--samples-per-client', type=int, default=20, help='samples to allocate to each client (per class, for lotteryfl, or per client, for iid)')
 parser.add_argument('--prox', type=float, default=0, help='coefficient to proximal term (i.e. in FedProx)')
-parser.add_argument('--hidden-size', type=int, default=32, help='Number of channels for each convolutional layer (default: 64).')
+parser.add_argument('--hidden-size', nargs='+', type=int, default=32, help='Number of channels for each convolutional layer (default: 64).')
 parser.add_argument('--num-ways', type=int, default=10, help='Number of classes per task (N in "N-way", default: 5).')
+parser.add_argument('--wh-size', type=int, default=7, help='Size of the hidden layer in the network (default: 7).')
 
 # Pruning and regrowth options
 parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0 to 1')
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
+parser.add_argument('--pruning-begin', type=int, default=9, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
@@ -64,6 +67,7 @@ parser.add_argument('--no-eval', default=True, action='store_false', dest='eval'
 parser.add_argument('--fp16', default=False, action='store_true', help='upload as fp16')
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
 parser.add_argument('--seed', default=42, type=int, help='random seed')
+parser.add_argument('--loss-scaling', type=float, default=1.0, help='Loss scaling factor for Co-learner (default: 1.0).')
 
 args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
@@ -135,21 +139,23 @@ def evaluate_local(clients, global_model, progress=False, n_batches=0):
 
 def load_model(args):
 
-    if args.dataset in ['mnist', 'emnist']:
+    if args.dataset in ['mnist']:
+        wh_size = 16
+    elif args.dataset in ['emnist']:
         wh_size = 7
     elif args.dataset in ['cifar10', 'cifar100']:
-        wh_size = 4
+        wh_size = 20
     else:
         raise ValueError("Unsupported dataset type")
 
     if args.dataset == 'mnist':
-        model = models.MNISTNet(in_channels=1, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+        model = models.MNISTNet(in_channels=1, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
     elif args.dataset == 'emnist':
-        model = models.Conv2(in_channels=1, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+        model = models.Conv2(in_channels=1, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
     elif args.dataset == 'cifar10':
-        model = models.CIFAR10Net(in_channels=3, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+        model = models.CIFAR10Net(in_channels=3, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
     elif args.dataset == 'cifar100':
-        model = models.CIFAR100Net(in_channels=3, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+        model = models.CIFAR100Net(in_channels=3, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
     else:
         raise ValueError("Unsupported dataset type")
 
@@ -206,6 +212,7 @@ class Client:
         self.reset_optimizer()
 
         self.local_epochs = local_epochs
+        self.curr_epoch = 0
 
         # save the initial global params given to us by the server
         # for LTH pruning later.
@@ -230,7 +237,7 @@ class Client:
         return sum(len(x) for x in self.train_data)
 
 
-    def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio):
+    def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
@@ -259,6 +266,7 @@ class Client:
         for epoch in range(self.local_epochs):
 
             self.net.train()
+            self.co_learner_net.train()
 
             running_loss = 0.
             for inputs, labels in self.train_data:
@@ -289,7 +297,7 @@ class Client:
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
-                _, logit = self.net(inputs, 2)
+                _, logit = self.net(inputs)
                 self.criterion(logit, labels).backward()
 
                 self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
@@ -311,22 +319,26 @@ class Client:
         # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         return ret
 
-    def test(self, model=None, n_batches=0):
+    def test(self, model=None, co_model=None, n_batches=0):
         '''Evaluate the local model on the local test set.
 
         model - model to evaluate, or this client's model if None
         n_batches - number of minibatches to test on, or 0 for all of them
         '''
         correct = 0.
+        co_correct = 0.
         total = 0.
 
         if model is None:
             model = self.net
-            co_model = self.co_learner_net
             _model = self.net
-            _co_model = self.co_learner_net
         else:
             _model = model.to(self.device)
+
+        if co_model is None:
+            co_model = self.co_learner_net
+            _co_model = self.co_learner_net
+        else:
             _co_model = co_model.to(self.device)
 
         _model.eval()
@@ -369,7 +381,7 @@ download_cost_history = []
 upload_cost_history = []
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
-    cl = Client(client_id, device, *client_loaders, local_epochs=args.epochs,
+    cl = Client(client_id, *client_loaders, local_epochs=args.epochs,
                 learning_rate=args.eta, target_sparsity=args.sparsity)
 
     clients[client_id] = cl
@@ -543,7 +555,7 @@ for server_round in tqdm(range(args.rounds)):
 
     # evaluate performance
     torch.cuda.empty_cache()
-    if server_round % args.eval_every == 0 and args.eval:
+    if server_round % args.eval_every == 0 and args.eval and server_round > 0:
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
@@ -553,7 +565,7 @@ for server_round in tqdm(range(args.rounds)):
 
     for client_id in clients:
         i = client_ids.index(client_id)
-        if server_round % args.eval_every == 0 and args.eval:
+        if server_round % args.eval_every == 0 and args.eval and server_round > 0:
             print_csv_line(pid=args.pid,
                            dataset=args.dataset,
                            clients=args.clients,
