@@ -262,6 +262,7 @@ class Client:
         for epoch in range(self.local_epochs):
 
             self.net.train()
+            self.co_learner_net.train()
 
             running_loss = 0.
             for inputs, labels in self.train_data:
