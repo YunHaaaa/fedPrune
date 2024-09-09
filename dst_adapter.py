@@ -46,6 +46,7 @@ parser.add_argument('--rate-decay-method', default='cosine', choices=('constant'
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
 parser.add_argument('--pruning-begin', type=int, default=9, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
