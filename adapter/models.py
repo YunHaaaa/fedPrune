@@ -598,7 +598,7 @@ class CoLearner(PrunableNet):
         # Co-learner
         self.conv1 = nn.Conv2d(in_channels=hidden_size[1], out_channels=hidden_size[1], kernel_size=5)
         self.conv2 = nn.Conv2d(hidden_size[1], hidden_size[1], 5)
-        self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
+        self.fc1 = nn.Linear(hidden_size[1] * wh_size, out_features)
 
     def forward(self, inputs):
         x = F.relu(F.max_pool2d(self.conv1(inputs), 3, stride=1))
