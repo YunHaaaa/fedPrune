@@ -326,6 +326,7 @@ class Client:
         n_batches - number of minibatches to test on, or 0 for all of them
         '''
         correct = 0.
+        co_correct = 0.
         total = 0.
 
         if model is None:
