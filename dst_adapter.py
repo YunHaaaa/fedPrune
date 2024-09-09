@@ -136,10 +136,12 @@ def evaluate_local(clients, global_model, progress=False, n_batches=0):
 
 def load_model(args):
 
-    if args.dataset in ['mnist', 'emnist']:
+    if args.dataset in ['mnist']:
+        wh_size = 16
+    elif args.dataset in ['emnist']:
         wh_size = 7
     elif args.dataset in ['cifar10', 'cifar100']:
-        wh_size = 4
+        wh_size = 20
     else:
         raise ValueError("Unsupported dataset type")
 
