@@ -594,9 +594,9 @@ class Conv2(PrunableNet):
 class CoLearner(nn.Module):
     def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(CoLearner, self).__init__()
-        
+        print(in_channels, out_features, hidden_size, wh_size)
         # Co-learner
-        self.conv1 = nn.Conv2d(in_channels[0], hidden_size[0], 5)
+        self.conv1 = nn.Conv2d(in_channels=hidden_size[1], out_channels=hidden_size[1], kernel_size=5)
         self.conv2 = nn.Conv2d(hidden_size[1], hidden_size[1], 5)
         self.fc1 = nn.Linear(hidden_size[1] * wh_size * wh_size, out_features)
 
