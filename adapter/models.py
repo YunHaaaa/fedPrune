@@ -508,9 +508,9 @@ class MNISTNet(PrunableNet):
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
-        x = x.view(-1, self.num_flat_features(x))
         feature = x
 
+        x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         logits = self.fc2(x)
 
@@ -533,9 +533,9 @@ class CIFAR10Net(PrunableNet):
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
-        x = x.view(-1, self.num_flat_features(x))
         feature = x
 
+        x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         logits = self.fc3(x)
@@ -558,9 +558,9 @@ class CIFAR100Net(PrunableNet):
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
-        x = x.view(-1, self.num_flat_features(x))
         feature = x
 
+        x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         logits = self.fc2(x)
 
@@ -582,9 +582,9 @@ class Conv2(PrunableNet):
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 2, stride=2))
         x = F.relu(F.max_pool2d(self.conv2(x), 2, stride=2))
-        x = x.view(-1, self.num_flat_features(x))
         feature = x
 
+        x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         logits = self.fc2(x)
 
