@@ -591,7 +591,7 @@ class Conv2(PrunableNet):
         return feature, logits
 
 
-class CoLearner(nn.Module):
+class CoLearner(PrunableNet):
     def __init__(self, in_channels, out_features, hidden_size, wh_size):
         super(CoLearner, self).__init__()
         print(in_channels, out_features, hidden_size, wh_size)
