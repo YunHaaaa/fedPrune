@@ -237,7 +237,7 @@ class Client:
         return sum(len(x) for x in self.train_data)
 
 
-    def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio):
+    def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
@@ -297,7 +297,7 @@ class Client:
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
-                _, logit = self.net(inputs, 2)
+                _, logit = self.net(inputs)
                 self.criterion(logit, labels).backward()
 
                 self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
@@ -319,7 +319,7 @@ class Client:
         # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         return ret
 
-    def test(self, model=None, n_batches=0):
+    def test(self, model=None, co_model=None, n_batches=0):
         '''Evaluate the local model on the local test set.
 
         model - model to evaluate, or this client's model if None
@@ -330,11 +330,14 @@ class Client:
 
         if model is None:
             model = self.net
-            co_model = self.co_learner_net
             _model = self.net
-            _co_model = self.co_learner_net
         else:
             _model = model.to(self.device)
+
+        if co_model is None:
+            co_model = self.co_learner_net
+            _co_model = self.co_learner_net
+        else:
             _co_model = co_model.to(self.device)
 
         _model.eval()
@@ -551,7 +554,7 @@ for server_round in tqdm(range(args.rounds)):
 
     # evaluate performance
     torch.cuda.empty_cache()
-    if server_round % args.eval_every == 0 and args.eval:
+    if server_round % args.eval_every == 0 and args.eval and server_round > 0:
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
@@ -561,7 +564,7 @@ for server_round in tqdm(range(args.rounds)):
 
     for client_id in clients:
         i = client_ids.index(client_id)
-        if server_round % args.eval_every == 0 and args.eval:
+        if server_round % args.eval_every == 0 and args.eval and server_round > 0:
             print_csv_line(pid=args.pid,
                            dataset=args.dataset,
                            clients=args.clients,
