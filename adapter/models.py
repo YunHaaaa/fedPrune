@@ -512,7 +512,7 @@ class MNISTNet(PrunableNet):
 
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
-        logits = self.fc2(x)
+        logits = F.softmax(self.fc2(x), dim=1)
 
         return feature, logits
 
@@ -538,7 +538,7 @@ class CIFAR10Net(PrunableNet):
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        logits = self.fc3(x)
+        logits = F.softmax(self.fc3(x), dim=1)
 
         return feature, logits
 
@@ -562,7 +562,7 @@ class CIFAR100Net(PrunableNet):
 
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
-        logits = self.fc2(x)
+        logits = F.softmax(self.fc2(x), dim=1)
 
         return feature, logits
 
@@ -586,7 +586,7 @@ class Conv2(PrunableNet):
 
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
-        logits = self.fc2(x)
+        logits = F.softmax(self.fc2(x), dim=1)
 
         return feature, logits
 
@@ -606,7 +606,7 @@ class CoLearner(PrunableNet):
         x = x.view(-1, self.num_flat_features(x))
         features = x
 
-        logits = self.fc1(x)
+        logits = F.softmax(self.fc1(x), dim=1)
 
         return features, logits
 
