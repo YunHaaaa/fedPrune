@@ -56,7 +56,7 @@ parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: f
 parser.add_argument('--prune-imp', type=str, dest='prune_imp', default='L1', help='Importance Method : L1, L2, grad, syn')
 parser.add_argument('--pruning-method', type=str, default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
 parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
-parser.add_argument('--prune-type', type=str, default='structured', choices=('structured', 'unstructured'), help='pruning type')
+parser.add_argument('--dpf-type', type=str, default='structured', choices=('structured', 'unstructured'), help='pruning type')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -349,7 +349,7 @@ initialize_mask(global_model)
 
 
 if args.pruning_method == 'dpf':
-    if args.prune_type == 'structured':
+    if args.dpf_type == 'structured':
         filter_mask = utils.get_filter_mask(global_model, args.sparsity, args)
         utils.filter_prune(global_model, filter_mask)
     else:
@@ -513,7 +513,7 @@ for server_round in tqdm(range(args.rounds)):
         # we use layer-wise magnitude pruning as before.
 
         if args.pruning_method == 'dpf':
-            if args.prune_type == 'structured':
+            if args.dpf_type == 'structured':
                 filter_mask = utils.get_filter_mask(global_model, round_sparsity, args)
                 utils.filter_prune(global_model, filter_mask)
             else:
