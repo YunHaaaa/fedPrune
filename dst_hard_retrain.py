@@ -49,6 +49,7 @@ parser.add_argument('--final-sparsity', type=float, default=None, help='final sp
 parser.add_argument('--pruning-ratio', type=float, default=0.7, help='pruning ratio for each round')
 parser.add_argument('--pruning-type', type=str, default='hard', choices=['hard', 'soft'], help='Pruning type: hard or soft pruning')
 parser.add_argument('--pruning-method', type=str, default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
+parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -492,7 +493,7 @@ for server_round in tqdm(range(args.rounds)):
             else:
                 threshold = utils.get_weight_threshold(global_model, round_sparsity, args)
                 utils.weight_prune(global_model, threshold, args)
-            utils.random_prune(global_model, args.random_pruning_rate)
+            # utils.random_prune(global_model, args.random_pruning_rate)
 
         elif args.pruning_method == 'prune_grow':
             global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)

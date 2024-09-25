@@ -356,7 +356,7 @@ if args.pruning_method == 'dpf':
     else:
         threshold = utils.get_weight_threshold(global_model, args.sparsity, args)
         utils.weight_prune(global_model, threshold, args)
-    utils.random_prune(global_model, args.random_pruning_rate)
+    # utils.random_prune(global_model, args.random_pruning_rate)
 
 elif args.pruning_method == 'prune_grow':
     global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
@@ -528,7 +528,7 @@ for server_round in tqdm(range(args.rounds)):
             else:
                 threshold = utils.get_weight_threshold(global_model, round_sparsity, args)
                 utils.weight_prune(global_model, threshold, args)
-            utils.random_prune(global_model, args.random_pruning_rate)
+            # utils.random_prune(global_model, args.random_pruning_rate)
 
         elif args.pruning_method == 'prune_grow':
             global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
