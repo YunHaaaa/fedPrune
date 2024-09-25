@@ -139,7 +139,7 @@ class PrunableNet(nn.Module):
             return {layer_names[i]: n_weights[i] for i in range(len(layer_names))}
 
 
-    def layer_prune(self, sparsity=0.1, sparsity_distribution='erk'):
+    def layer_prune(self, sparsity=0.1, sparsity_distribution='erk', pruning_type='hard'):
         '''
         Prune the network to the desired sparsity, following the specified
         sparsity distribution. The weight magnitude is used for pruning.
@@ -147,6 +147,9 @@ class PrunableNet(nn.Module):
         uniform: layer sparsity = global sparsity
         er: Erdos-Renyi
         erk: Erdos-Renyi Kernel
+        
+        pruning_type: 'hard' -> set weight to 0
+                    'soft' -> set mask to 0 but keep weight
         '''
 
         #print('desired sparsity', sparsity)
@@ -168,14 +171,16 @@ class PrunableNet(nn.Module):
                         continue
 
                     # Determine smallest indices
-                    _, prune_indices = torch.topk(torch.abs(param.data.flatten()),
-                                                  n_prune, largest=False)
+                    _, prune_indices = torch.topk(torch.abs(param.data.flatten()), n_prune, largest=False)
 
-                    # Write and apply mask
-                    param.data.view(param.data.numel())[prune_indices] = 0
+                    # Hard pruning: set the weights to 0
+                    if pruning_type == 'hard':
+                        param.data.view(param.data.numel())[prune_indices] = 0
+
+                    # Soft pruning: only set the mask to 0, keep the weights
                     for bname, buf in layer.named_buffers():
                         if bname == pname + '_mask':
-                            buf.view(buf.numel())[prune_indices] = 0
+                            buf.view(buf.numel())[prune_indices] = 0  # Mask는 0으로 설정
             #print('pruned sparsity', self.sparsity())
 
 

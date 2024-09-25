@@ -50,6 +50,7 @@ parser.add_argument('--remember-old', default=False, action='store_true', help="
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
 parser.add_argument('--pruning-ratio', type=float, default=0.7, help='pruning ratio for each round')
+parser.add_argument('--pruning_type', type=str, default='hard', choices=['hard', 'soft'], help='Pruning type: hard or soft pruning')
 
 # Add DPF options
 parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: full use, 2: dpf')
@@ -270,7 +271,7 @@ class Client:
                 outputs = self.net(inputs, 2)
                 self.criterion(outputs, labels).backward()
 
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
                 self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
                 
                 ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
@@ -358,7 +359,7 @@ if args.pruning_method == 'dpf':
     utils.random_prune(global_model, args.random_pruning_rate)
 
 elif args.pruning_method == 'prune_grow':
-    global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution)
+    global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
 initial_global_params = deepcopy(global_model.state_dict())
 
@@ -522,7 +523,7 @@ for server_round in tqdm(range(args.rounds)):
             utils.random_prune(global_model, args.random_pruning_rate)
 
         elif args.pruning_method == 'prune_grow':
-            global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
+            global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
     # discard old weights and apply new mask
     global_params = global_model.state_dict()
