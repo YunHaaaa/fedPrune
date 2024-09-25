@@ -52,7 +52,7 @@ parser.add_argument('--remember-old', default=False, action='store_true', help="
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
 parser.add_argument('--pruning-ratio', type=float, default=0.7, help='pruning ratio for each round')
-parser.add_argument('--pruning_type', type=str, default='hard', choices=['hard', 'soft'], help='Pruning type: hard or soft pruning')
+parser.add_argument('--pruning-type', type=str, default='hard', choices=['hard', 'soft'], help='Pruning type: hard or soft pruning')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
