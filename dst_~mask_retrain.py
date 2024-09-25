@@ -43,7 +43,7 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
-parser.add_argument('--pruning-begin', type=int, default=6, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-begin', type=int, default=2, help='first epoch number when we should readjust')
 parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
@@ -263,7 +263,7 @@ class Client:
 
                 running_loss += loss.item()
             
-            if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
+            if epoch == args.pruning_begin:
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
@@ -553,7 +553,7 @@ for server_round in tqdm(range(args.rounds)):
                            batch_size=args.batch_size,
                            epochs=args.epochs,
                            target_sparsity=round_sparsity,
-                           pruning_rate=args.readjustment_ratio,
+                           pruning_rate=readjustment_ratio,
                            initial_pruning_threshold='',
                            final_pruning_threshold='',
                            pruning_threshold_growth_method='',
