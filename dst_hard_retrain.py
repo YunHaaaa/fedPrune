@@ -256,7 +256,7 @@ class Client:
         else:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
-            
+        # TODO: TEST
         # with torch.no_grad():
         #     for name, param in self.net.named_parameters():
         #         if name in masked_weights:
