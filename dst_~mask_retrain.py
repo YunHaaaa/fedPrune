@@ -458,15 +458,18 @@ for server_round in tqdm(range(args.rounds)):
                 if readjust:
                     dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
 
-                aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
-                aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
-                aggregated_masks[name].add_(client.train_size() * cl_mask)
-                if args.remember_old:
-                    sv_mask[cl_mask] = 0
-                    sv_param = global_params[name].to('cpu', copy=True)
+                if args.pruning_type == 'soft':
+                    aggregated_masks[name].add_(client.train_size() * cl_mask)
+                else:
+                    aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
+                    aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
+                    aggregated_masks[name].add_(client.train_size() * cl_mask)
 
-                    aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
-                    aggregated_masks[name].add_(client.train_size() * sv_mask)
+                    if args.remember_old:
+                        sv_mask[cl_mask] = 0
+                        sv_param = global_params[name].to('cpu', copy=True)
+                        aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
+                        aggregated_masks[name].add_(client.train_size() * sv_mask)
             else:
                 # things like biases don't have masks
                 aggregated_params[name].add_(client.train_size() * cl_param)
@@ -481,14 +484,19 @@ for server_round in tqdm(range(args.rounds)):
             aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
             continue
 
-        # drop parameters with not enough votes
-        aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
+        if args.pruning_type == 'soft':
+            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
+            aggregated_masks[name] /= aggregated_masks[name]
 
-        # otherwise, we are taking the weighted average w.r.t. the number of 
-        # samples present on each of the clients.
-        aggregated_params[name] /= aggregated_masks[name]
-        aggregated_params_for_mask[name] /= aggregated_masks[name]
-        aggregated_masks[name] /= aggregated_masks[name]
+        else:
+            # drop parameters with not enough votes
+            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
+
+            # otherwise, we are taking the weighted average w.r.t. the number of 
+            # samples present on each of the clients.
+            aggregated_params[name] /= aggregated_masks[name]
+            aggregated_params_for_mask[name] /= aggregated_masks[name]
+            aggregated_masks[name] /= aggregated_masks[name]
 
         # it's possible that some weights were pruned by all clients. In this
         # case, we will have divided by zero. Those values have already been
@@ -529,8 +537,13 @@ for server_round in tqdm(range(args.rounds)):
     global_params = global_model.state_dict()
     for name, mask in aggregated_masks.items():
         new_mask = global_params[name + '_mask']
-        aggregated_params[name + '_mask'] = new_mask
-        aggregated_params[name][~new_mask] = 0
+        
+        if args.pruning_type == 'soft':
+            aggregated_params[name + '_mask'] = new_mask
+        else:
+            aggregated_params[name + '_mask'] = new_mask
+            aggregated_params[name][~new_mask] = 0
+
     global_model.load_state_dict(aggregated_params)
 
     # evaluate performance
