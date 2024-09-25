@@ -47,6 +47,9 @@ parser.add_argument('--remember-old', default=False, action='store_true', help="
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
 parser.add_argument('--pruning-ratio', type=float, default=0.7, help='pruning ratio for each round')
+parser.add_argument('--pruning-type', type=str, default='hard', choices=['hard', 'soft'], help='Pruning type: hard or soft pruning')
+parser.add_argument('--pruning-method', type=str, default='prune_grow', choices=('dpf', 'prune_grow'), help='pruning method')
+parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -241,7 +244,7 @@ class Client:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
                 loss.backward()
                 self.optimizer.step()
-
+            
                 if epoch == self.local_epochs * pruning_ratio:
                     masked_weights = self.apply_hard_mask()
                 
@@ -253,7 +256,7 @@ class Client:
         else:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
-            
+        # TODO: TEST
         # with torch.no_grad():
         #     for name, param in self.net.named_parameters():
         #         if name in masked_weights:
@@ -324,7 +327,7 @@ global_model = all_models[args.dataset](device='cpu')
 initialize_mask(global_model)
 
 
-global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution)
+global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
 initial_global_params = deepcopy(global_model.state_dict())
 
@@ -420,15 +423,18 @@ for server_round in tqdm(range(args.rounds)):
                 if readjust:
                     dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
 
-                aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
-                aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
-                aggregated_masks[name].add_(client.train_size() * cl_mask)
-                if args.remember_old:
-                    sv_mask[cl_mask] = 0
-                    sv_param = global_params[name].to('cpu', copy=True)
+                if args.pruning_type == 'soft':
+                    aggregated_masks[name].add_(client.train_size() * cl_mask)
+                else:
+                    aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
+                    aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
+                    aggregated_masks[name].add_(client.train_size() * cl_mask)
 
-                    aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
-                    aggregated_masks[name].add_(client.train_size() * sv_mask)
+                    if args.remember_old:
+                        sv_mask[cl_mask] = 0
+                        sv_param = global_params[name].to('cpu', copy=True)
+                        aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
+                        aggregated_masks[name].add_(client.train_size() * sv_mask)
             else:
                 # things like biases don't have masks
                 aggregated_params[name].add_(client.train_size() * cl_param)
@@ -443,14 +449,19 @@ for server_round in tqdm(range(args.rounds)):
             aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
             continue
 
-        # drop parameters with not enough votes
-        aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
+        if args.pruning_type == 'soft':
+            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
+            aggregated_masks[name] /= aggregated_masks[name]
 
-        # otherwise, we are taking the weighted average w.r.t. the number of 
-        # samples present on each of the clients.
-        aggregated_params[name] /= aggregated_masks[name]
-        aggregated_params_for_mask[name] /= aggregated_masks[name]
-        aggregated_masks[name] /= aggregated_masks[name]
+        else:
+            # drop parameters with not enough votes
+            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
+
+            # otherwise, we are taking the weighted average w.r.t. the number of 
+            # samples present on each of the clients.
+            aggregated_params[name] /= aggregated_masks[name]
+            aggregated_params_for_mask[name] /= aggregated_masks[name]
+            aggregated_masks[name] /= aggregated_masks[name]
 
         # it's possible that some weights were pruned by all clients. In this
         # case, we will have divided by zero. Those values have already been
@@ -474,14 +485,30 @@ for server_round in tqdm(range(args.rounds)):
         # we now have denser networks than we started with at the beginning of
         # the round. reprune on the server to get back to the desired sparsity.
         # we use layer-wise magnitude pruning as before.
-        global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
+
+        if args.pruning_method == 'dpf':
+            if args.dpf_type == 'structured':
+                filter_mask = utils.get_filter_mask(global_model, round_sparsity, args)
+                utils.filter_prune(global_model, filter_mask)
+            else:
+                threshold = utils.get_weight_threshold(global_model, round_sparsity, args)
+                utils.weight_prune(global_model, threshold, args)
+            # utils.random_prune(global_model, args.random_pruning_rate)
+
+        elif args.pruning_method == 'prune_grow':
+            global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
     # discard old weights and apply new mask
     global_params = global_model.state_dict()
     for name, mask in aggregated_masks.items():
         new_mask = global_params[name + '_mask']
-        aggregated_params[name + '_mask'] = new_mask
-        aggregated_params[name][~new_mask] = 0
+        
+        if args.pruning_type == 'soft':
+            aggregated_params[name + '_mask'] = new_mask
+        else:
+            aggregated_params[name + '_mask'] = new_mask
+            aggregated_params[name][~new_mask] = 0
+
     global_model.load_state_dict(aggregated_params)
 
     # evaluate performance
@@ -493,7 +520,7 @@ for server_round in tqdm(range(args.rounds)):
         accuracy_history.append(np.mean(list(accuracies.values())))
         download_cost_history.append(sum(download_cost))
         upload_cost_history.append(sum(upload_cost))
-
+        
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:

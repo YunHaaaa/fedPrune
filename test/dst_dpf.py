@@ -55,7 +55,7 @@ parser.add_argument('--type-value', type=int, default=0, help='0: part use, 1: f
 parser.add_argument('--prune-imp', type=str, dest='prune_imp', default='L1', help='Importance Method : L1, L2, grad, syn')
 parser.add_argument('--pruning-method', type=str, default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
 parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
-parser.add_argument('--prune-type', type=str, default='structured', choices=('structured', 'unstructured'), help='pruning type')
+parser.add_argument('--dpf-type', type=str, default='structured', choices=('structured', 'unstructured'), help='pruning type')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -285,7 +285,7 @@ class Client:
                     prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
 
             if args.pruning_method == 'dpf':
-                if args.prune_type == 'structured':
+                if args.dpf_type == 'structured':
                     filter_mask = utils.get_filter_mask(self.net, prune_sparsity, args)
                     utils.filter_prune(self.net, filter_mask)
                 else:

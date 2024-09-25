@@ -52,6 +52,7 @@ parser.add_argument('--remember-old', default=False, action='store_true', help="
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
 parser.add_argument('--pruning-ratio', type=float, default=0.7, help='pruning ratio for each round')
+parser.add_argument('--pruning-type', type=str, default='hard', choices=['hard', 'soft'], help='Pruning type: hard or soft pruning')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -104,6 +105,7 @@ def nan_to_num(x, nan=0, posinf=0, neginf=0):
 def evaluate_global(clients, global_model, progress=False, n_batches=0):
     with torch.no_grad():
         accuracies = {}
+        co_accuracies = {}
         sparsities = {}
 
         if progress:
@@ -112,10 +114,12 @@ def evaluate_global(clients, global_model, progress=False, n_batches=0):
             enumerator = clients.items()
 
         for client_id, client in enumerator:
-            accuracies[client_id] = client.test(model=global_model).item()
+            accuracy, co_accuracy = client.test(model=global_model)
+            accuracies[client_id] = accuracy.item()
+            co_accuracies[client_id] = co_accuracy.item()
             sparsities[client_id] = client.sparsity()
 
-    return accuracies, sparsities
+    return accuracies, co_accuracies, sparsities
 
 
 def evaluate_local(clients, global_model, progress=False, n_batches=0):
@@ -123,6 +127,7 @@ def evaluate_local(clients, global_model, progress=False, n_batches=0):
     # we need to perform an update to client's weights.
     with torch.no_grad():
         accuracies = {}
+        co_accuracies = {}
         sparsities = {}
 
         if progress:
@@ -132,10 +137,12 @@ def evaluate_local(clients, global_model, progress=False, n_batches=0):
 
         for client_id, client in enumerator:
             client.reset_weights(global_state=global_model.state_dict(), use_global_mask=True)
-            accuracies[client_id] = client.test().item()
+            accuracy, co_accuracy = client.test(model=global_model)
+            accuracies[client_id] = accuracy.item()
+            co_accuracies[client_id] = co_accuracy.item()
             sparsities[client_id] = client.sparsity()
 
-    return accuracies, sparsities
+    return accuracies, co_accuracies, sparsities
 
 def load_model(args):
 
@@ -290,6 +297,8 @@ class Client:
                 
                 self.optimizer.step()
                 self.co_optimizer.step()
+
+                self.reset_weights() # applies the mask
                 
                 running_loss += loss.item()
 
@@ -300,7 +309,7 @@ class Client:
                 _, logit = self.net(inputs)
                 self.criterion(logit, labels).backward()
 
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
                 self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
                 
                 ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
@@ -368,7 +377,7 @@ class Client:
         if co_model is not _co_model:
             del _co_model
 
-        return (correct + co_correct) / (total * 2)
+        return correct / total,  co_correct / total
 
 
 # initialize clients
@@ -377,6 +386,7 @@ clients = {}
 client_ids = []
 
 accuracy_history = []
+co_accuracy_history = []
 download_cost_history = []
 upload_cost_history = []
 
@@ -393,7 +403,7 @@ global_model, _ = load_model(args)
 global_model = global_model.to('cpu')
 initialize_mask(global_model)
 
-global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution)
+global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
 initial_global_params = deepcopy(global_model.state_dict())
 
@@ -543,7 +553,7 @@ for server_round in tqdm(range(args.rounds)):
         # we now have denser networks than we started with at the beginning of
         # the round. reprune on the server to get back to the desired sparsity.
         # we use layer-wise magnitude pruning as before.
-        global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
+        global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
     # discard old weights and apply new mask
     global_params = global_model.state_dict()
@@ -556,10 +566,11 @@ for server_round in tqdm(range(args.rounds)):
     # evaluate performance
     torch.cuda.empty_cache()
     if server_round % args.eval_every == 0 and args.eval and server_round > 0:
-        accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
+        accuracies, co_accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
         accuracy_history.append(np.mean(list(accuracies.values())))
+        co_accuracy_history.append(np.mean(list(co_accuracies.values())))
         download_cost_history.append(sum(download_cost))
         upload_cost_history.append(sum(upload_cost))
 
@@ -582,6 +593,7 @@ for server_round in tqdm(range(args.rounds)):
                            lth=False,
                            client_id=client_id,
                            accuracy=accuracies[client_id],
+                           co_accuracy=co_accuracies[client_id],
                            sparsity=sparsities[client_id],
                            compute_time=compute_times[i],
                            download_cost=download_cost[i],
@@ -611,8 +623,10 @@ print2(f'{args.rounds} rounds of federated learning')
 print2()
 
 accuracies = list(accuracies.values())
+co_accuracies = list(co_accuracies.values())
 sparsities = list(sparsities.values())
 print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
+print2(f'CO_ACCURACY: mean={np.mean(co_accuracies)}, std={np.std(co_accuracies)}, min={np.min(co_accuracies)}, max={np.max(co_accuracies)}')
 print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
 print2()
 print2()
@@ -627,6 +641,7 @@ with open(filename, mode='w', newline='') as file:
     for i in range(1, len(accuracy_history)):
         round_num = i * args.eval_every
         accuracy = accuracy_history[i] * 100  # 퍼센트로 변환
+        co_accuracy = co_accuracy_history[i] * 100
         download_cost = download_cost_history[i]
         upload_cost = upload_cost_history[i]
         

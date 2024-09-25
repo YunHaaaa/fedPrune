@@ -139,7 +139,7 @@ class PrunableNet(nn.Module):
             return {layer_names[i]: n_weights[i] for i in range(len(layer_names))}
 
 
-    def layer_prune(self, sparsity=0.1, sparsity_distribution='erk'):
+    def layer_prune(self, sparsity=0.1, sparsity_distribution='erk', pruning_type='hard'):
         '''
         Prune the network to the desired sparsity, following the specified
         sparsity distribution. The weight magnitude is used for pruning.
@@ -147,6 +147,9 @@ class PrunableNet(nn.Module):
         uniform: layer sparsity = global sparsity
         er: Erdos-Renyi
         erk: Erdos-Renyi Kernel
+        
+        pruning_type: 'hard' -> set weight to 0
+                    'soft' -> set mask to 0 but keep weight
         '''
 
         #print('desired sparsity', sparsity)
@@ -168,14 +171,16 @@ class PrunableNet(nn.Module):
                         continue
 
                     # Determine smallest indices
-                    _, prune_indices = torch.topk(torch.abs(param.data.flatten()),
-                                                  n_prune, largest=False)
+                    _, prune_indices = torch.topk(torch.abs(param.data.flatten()), n_prune, largest=False)
 
-                    # Write and apply mask
-                    param.data.view(param.data.numel())[prune_indices] = 0
+                    # Hard pruning: set the weights to 0
+                    if pruning_type == 'hard':
+                        param.data.view(param.data.numel())[prune_indices] = 0
+
+                    # Soft pruning: only set the mask to 0, keep the weights
                     for bname, buf in layer.named_buffers():
                         if bname == pname + '_mask':
-                            buf.view(buf.numel())[prune_indices] = 0
+                            buf.view(buf.numel())[prune_indices] = 0  # Mask는 0으로 설정
             #print('pruned sparsity', self.sparsity())
 
 
@@ -309,13 +314,11 @@ class PrunableNet(nn.Module):
             self.load_state_dict(state)
 
     def reset_weights(self, global_state=None, use_global_mask=False,
-                      keep_local_masked_weights=False,
-                      global_communication_mask=False):
+                      global_communication_mask=False, pruning_type='soft'):
         '''Reset weights to the given global state and apply the mask.
         - If global_state is None, then only apply the mask in the current state.
         - use_global_mask will reset the local mask to the global mask.
-        - keep_local_masked_weights will use the global weights where masked 1, and
-          use the local weights otherwise.
+        - pruning_type allows for 'soft' or 'hard' pruning.
         '''
 
         with torch.no_grad():
@@ -370,15 +373,14 @@ class PrunableNet(nn.Module):
                     # permits them to be copied
                     new_state[name][mask_to_apply] = gpu_param
 
+                    if pruning_type == 'hard':
+                        new_state[name][~mask_to_apply] = 0  # Set all non-masked weights to zero (hard pruning).
+
                     # Don't bother allocating a *new* mask if not needed
                     if mask_name in local_state:
                         new_state[mask_name] = local_state[mask_name] 
 
                     new_state[mask_name].copy_(mask_to_copy) # copy mask from mask_source into this model's mask
-
-                    # what do we do with shadowed weights?
-                    if not keep_local_masked_weights:
-                        new_state[name][~mask_to_apply] = 0
 
                     if mask_name not in local_state or not torch.equal(local_state[mask_name], mask_to_copy):
                         mask_changed = True
@@ -392,6 +394,7 @@ class PrunableNet(nn.Module):
                     del gpu_param
 
             self.load_state_dict(new_state)
+
         return mask_changed
 
 
