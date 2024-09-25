@@ -244,7 +244,7 @@ class Client:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
                 loss.backward()
                 self.optimizer.step()
-
+            
                 if epoch == self.local_epochs * pruning_ratio:
                     masked_weights = self.apply_hard_mask()
                 

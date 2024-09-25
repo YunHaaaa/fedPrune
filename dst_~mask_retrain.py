@@ -265,6 +265,7 @@ class Client:
                 running_loss += loss.item()
             
             if epoch == args.pruning_begin:
+                # TODO: change args.readjustment_ratio to readjustment_ratio
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
