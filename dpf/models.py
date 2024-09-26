@@ -314,7 +314,7 @@ class PrunableNet(nn.Module):
             self.load_state_dict(state)
 
     def reset_weights(self, global_state=None, use_global_mask=False,
-                      global_communication_mask=False, pruning_type='soft'):
+                      global_communication_mask=False, pruning_type='hard'):
         '''Reset weights to the given global state and apply the mask.
         - If global_state is None, then only apply the mask in the current state.
         - use_global_mask will reset the local mask to the global mask.

@@ -211,7 +211,7 @@ class Client:
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
             # the client's weights every round
-            mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True)
+            mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True, pruning_type=args.pruning_type)
 
             # Try to reset the optimizer state.
             self.reset_optimizer()
