@@ -43,7 +43,7 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
-parser.add_argument('--pruning-begin', type=int, default=4, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-begin', type=int, default=6, help='first epoch number when we should readjust')
 parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
@@ -490,19 +490,14 @@ for server_round in tqdm(range(args.rounds)):
             aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
             continue
 
-        if args.pruning_type == 'soft':
-            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
-            aggregated_masks[name] /= aggregated_masks[name]
+        # drop parameters with not enough votes
+        aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
 
-        else:
-            # drop parameters with not enough votes
-            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
-
-            # otherwise, we are taking the weighted average w.r.t. the number of 
-            # samples present on each of the clients.
-            aggregated_params[name] /= aggregated_masks[name]
-            aggregated_params_for_mask[name] /= aggregated_masks[name]
-            aggregated_masks[name] /= aggregated_masks[name]
+        # otherwise, we are taking the weighted average w.r.t. the number of 
+        # samples present on each of the clients.
+        aggregated_params[name] /= aggregated_masks[name]
+        aggregated_params_for_mask[name] /= aggregated_masks[name]
+        aggregated_masks[name] /= aggregated_masks[name]
 
         # it's possible that some weights were pruned by all clients. In this
         # case, we will have divided by zero. Those values have already been
@@ -544,10 +539,9 @@ for server_round in tqdm(range(args.rounds)):
     for name, mask in aggregated_masks.items():
         new_mask = global_params[name + '_mask']
         
-        if args.pruning_type == 'soft':
-            aggregated_params[name + '_mask'] = new_mask
-        else:
-            aggregated_params[name + '_mask'] = new_mask
+        aggregated_params[name + '_mask'] = new_mask
+        
+        if args.pruning_type == 'hard':
             aggregated_params[name][~new_mask] = 0
 
     global_model.load_state_dict(aggregated_params)
