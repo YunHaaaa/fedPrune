@@ -16,9 +16,9 @@ from tqdm import tqdm
 import warnings
 
 from datasets import get_dataset
-import pruning.models as models
-from pruning.models import all_models, needs_mask, initialize_mask
-import pruning.utils as utils
+import dpf.models as models
+from dpf.models import all_models, needs_mask, initialize_mask
+import dpf.utils as utils
 
 rng = np.random.default_rng()
 
@@ -59,7 +59,7 @@ parser.add_argument('--pruning-type', type=str, default='hard', choices=['hard',
 # Add DPF options
 parser.add_argument('--type-value', type=int, default=4, help='0: part use, 1: full use, 2: dpf')
 parser.add_argument('--prune-imp', type=str, dest='prune_imp', default='L1', help='Importance Method : L1, L2, grad, syn')
-parser.add_argument('--pruning-method', type=str, default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
+parser.add_argument('--pruning-method', type=str, default='prune_grow', choices=('dpf', 'prune_grow'), help='pruning method')
 parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
 parser.add_argument('--dpf-type', type=str, default='structured', choices=('structured', 'unstructured'), help='pruning type')
 
@@ -254,12 +254,12 @@ class Client:
                 # otherwise, there is a DL cost: we need to receive all parameters masked '1' and
                 # all parameters that don't have a mask (e.g. biases in this case)
                 dl_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+        # print("client start sparsity:", self.net.sparsity())
 
         #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
         for epoch in range(self.local_epochs):
 
             self.net.train()
-            print("client start sparsity:", self.net.sparsity())
             running_loss = 0.
             for inputs, labels in self.train_data:
                 inputs = inputs.to(self.device)
@@ -383,8 +383,7 @@ if args.pruning_method == 'dpf':
 
 elif args.pruning_method == 'prune_grow':
     global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-print(args.sparsity, global_model.sparsity())
-print("---------")
+
 initial_global_params = deepcopy(global_model.state_dict())
 
 # we need to accumulate compute/DL/UL costs regardless of round number, resetting only
@@ -400,6 +399,9 @@ for server_round in tqdm(range(args.rounds)):
     client_indices = rng.choice(list(clients.keys()), size=args.clients)
 
     global_params = global_model.state_dict()
+    # print(args.sparsity, global_model.sparsity())
+    # print("---------")
+
     aggregated_params = {}
     aggregated_params_for_mask = {}
     aggregated_masks = {}
@@ -434,10 +436,12 @@ for server_round in tqdm(range(args.rounds)):
         # ...via linear interpolation
         if server_round <= args.rate_decay_end:   # rate_decay_end의 default는 false if false -> args.round // 2
             round_sparsity = args.sparsity * (args.rate_decay_end - server_round) / args.rate_decay_end + args.final_sparsity * server_round / args.rate_decay_end
-            print("rate_decay_end, round_sparsity", args.rate_decay_end, round_sparsity)
+            # print("rate_decay_end, round_sparsity", args.rate_decay_end, round_sparsity)
         else:
             round_sparsity = args.final_sparsity   # args.final_sparsity default는 false이고 if false -> args.sparsity
-            print("round_sparsity :", round_sparsity)    
+            # print("round_sparsity :", round_sparsity)   
+        # print("global_model:", global_model.sparsity())
+        # print("---------") 
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
                                     readjustment_ratio=readjustment_ratio, server_round=server_round,
@@ -450,7 +454,7 @@ for server_round in tqdm(range(args.rounds)):
         t1 = time.process_time()
         compute_times[i] = t1 - t0
         client.net.clear_gradients() # to save memory
-        print("client sparsity :", client.net.sparsity())
+        # print("client sparsity :", client.net.sparsity())
         # add this client's params to the aggregate
 
         cl_weight_params = {}
@@ -486,11 +490,8 @@ for server_round in tqdm(range(args.rounds)):
                 # 클라이언트 weight를 aggregate에 추가
                 aggregated_params[name].add_(client.train_size() * masked_cl_param)
 
-                # 기존 global weight에서 mask가 1인 부분은 그대로 유지
-                aggregated_params[name].add_(global_weight_masked)
-
                 # aggregated_masks 업데이트
-                aggregated_masks[name].add_(client.train_size() * (1 - sv_mask.float()))
+                aggregated_masks[name].add_(client.train_size() * (cl_mask.float()))
 
             else:
                 # 마스크가 없는 경우 (e.g. biases), 클라이언트 weight를 그대로 사용
@@ -506,7 +507,10 @@ for server_round in tqdm(range(args.rounds)):
         
         # 마스크가 있는 경우, weighted average 계산
         aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
-        aggregated_params[name] /= aggregated_masks[name]
+        if aggregated_masks[name].sum() > 0:
+            aggregated_params[name] /= aggregated_masks[name]
+        else:
+            aggregated_params[name] /= torch.max(aggregated_masks[name], torch.tensor(1.0))
         aggregated_params_for_mask[name] /= aggregated_masks[name]
         aggregated_masks[name] /= aggregated_masks[name]
 
@@ -526,7 +530,7 @@ for server_round in tqdm(range(args.rounds)):
     # reset global params to aggregated values
     global_model.load_state_dict(aggregated_params_for_mask)
 
-    print("before global pruning :", global_model.sparsity(), round_sparsity)
+    # print("before global pruning :", global_model.sparsity(), round_sparsity)
     if global_model.sparsity() < round_sparsity:
         if args.pruning_method == 'dpf':
             if args.dpf_type == 'structured':
@@ -548,6 +552,7 @@ for server_round in tqdm(range(args.rounds)):
 
     # global model의 업데이트된 파라미터 로드
     global_model.load_state_dict(aggregated_params)
+    # print("after global pruning :", global_model.sparsity(), round_sparsity)
 
     # evaluate performance
     torch.cuda.empty_cache()
