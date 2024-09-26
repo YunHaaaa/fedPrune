@@ -362,7 +362,7 @@ upload_cost_history = []
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, local_epochs=args.epochs,
-                learning_rate=args.eta, target_sparsity=args.sparsity)
+                learning_rate=args.eta, target_sparsity=args.sparsity, net=all_models[args.dataset])
 
     clients[client_id] = cl
     client_ids.append(client_id)
