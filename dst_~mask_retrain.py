@@ -463,6 +463,8 @@ for server_round in tqdm(range(args.rounds)):
                     dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
 
                 if args.pruning_type == 'soft':
+                    aggregated_params[name].add_(client.train_size() * cl_param)
+                    aggregated_params_for_mask[name].add_(client.train_size() * cl_param)
                     aggregated_masks[name].add_(client.train_size() * cl_mask)
                 else:
                     aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
