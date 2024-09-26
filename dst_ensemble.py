@@ -224,6 +224,7 @@ class Client:
 
         ul_cost = 0
         dl_cost = 0
+        model_merged = False  # 모델이 병합되었는지 여부를 추적
 
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
@@ -248,12 +249,33 @@ class Client:
         #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
         for epoch in range(self.local_epochs):
 
+            # 특정 에포크에 도달하면 두 모델을 병합
+            if epoch == int(self.local_epochs * pruning_ratio) and not model_merged:
+                self.merge_models()
+                model_merged = True
+                # 두 번째 모델에 대한 옵티마이저는 더 이상 필요하지 않음
+                del self.co_optimizer
+
+            # 병합 이후에는 하나의 모델만 훈련
+            if model_merged:
+                self.net.train()
+                for inputs, labels in self.train_data:
+                    inputs, labels = inputs.to(self.device), labels.to(self.device)
+                    self.optimizer.zero_grad()
+                    outputs = self.net(inputs)
+                    loss = self.criterion(outputs, labels)
+                    if args.prox > 0:
+                        loss += args.prox / 2. * self.net.proximal_loss(global_params)
+                    loss.backward()
+                    self.optimizer.step()
+                    self.reset_weights()
+                continue
+
+            # 병합 전에는 두 모델을 병렬로 훈련
             self.net.train()
             self.co_net.train()
-
             for inputs, labels in self.train_data:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
                 self.optimizer.zero_grad()
                 self.co_optimizer.zero_grad()
 
@@ -262,43 +284,21 @@ class Client:
 
                 loss = self.criterion(outputs, labels)
                 co_loss = self.criterion(co_outputs, labels)
-                
+
                 if args.prox > 0:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
                     co_loss += args.prox / 2. * self.co_net.proximal_loss(global_params)
-                
+
                 total_loss = loss + co_loss
                 total_loss.backward()
-                
+
                 self.optimizer.step()
                 self.co_optimizer.step()
 
-                # applies the mask
+                # 마스크 적용
                 self.reset_weights()
                 self.co_reset_weights()
 
-            # TODO: pruning_ratio 일 때, 모델 합치도록 수정
-
-            if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-                # recompute gradient if we used FedProx penalty
-                self.optimizer.zero_grad()
-                self.co_optimizer.zero_grad()
-
-                outputs = self.net(inputs)
-                co_outputs = self.co_net(inputs)
-                
-                self.criterion(outputs, labels).backward()
-                self.criterion(co_outputs, labels).backward()
-
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                
-                self.co_net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-                self.co_net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-
-                ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
-                
             self.curr_epoch += 1
             
         # we only need to transmit the masked weights and all biases
