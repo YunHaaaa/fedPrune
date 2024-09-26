@@ -43,7 +43,7 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
-parser.add_argument('--pruning-begin', type=int, default=6, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-begin', type=int, default=4, help='first epoch number when we should readjust')
 parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
@@ -222,7 +222,7 @@ class Client:
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
             # the client's weights every round
-            mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True)
+            mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True, pruning_type=args.pruning_type)
 
             # Try to reset the optimizer state.
             self.reset_optimizer()
@@ -249,8 +249,8 @@ class Client:
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
                 
-                if epoch >= args.pruning_begin:
-                    outputs = self.net(inputs, 2)
+                if epoch > args.pruning_begin:
+                    outputs = self.net(inputs, 4)
                 # TODO: type value 3, over 5
                 else:
                     outputs = self.net(inputs, args.type_value)
@@ -261,6 +261,9 @@ class Client:
 
                 loss.backward()
                 self.optimizer.step()
+
+                if epoch > args.pruning_begin:
+                    self.reset_weights() # applies the mask
 
                 running_loss += loss.item()
             
