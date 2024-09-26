@@ -54,13 +54,14 @@ parser.add_argument('--rounds-between-readjustments', type=int, default=10, help
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
+parser.add_argument('--pruning-type', type=str, default='hard', choices=['hard', 'soft'], help='Pruning type: hard or soft pruning')
 
 # Add DPF options
 parser.add_argument('--type-value', type=int, default=4, help='0: part use, 1: full use, 2: dpf')
 parser.add_argument('--prune-imp', type=str, dest='prune_imp', default='L1', help='Importance Method : L1, L2, grad, syn')
 parser.add_argument('--pruning-method', type=str, default='dpf', choices=('dpf', 'prune_grow'), help='pruning method')
 parser.add_argument('--random-pruning-rate', type=float, default=0.05, help='random pruning rate')
-parser.add_argument('--prune-type', type=str, default='structured', choices=('structured', 'unstructured'), help='pruning type')
+parser.add_argument('--dpf-type', type=str, default='structured', choices=('structured', 'unstructured'), help='pruning type')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -279,13 +280,13 @@ class Client:
                 if name.endswith('mask'):
                     global_mask[name] = mask_params
             
-            for name, local_param in self.net.state_dict().items():
+            for name, local_param in local_params.items():
                 if name.endswith('weight'):
                     mask = global_mask[name + '_mask']
                     
                     train_size = float(client.train_size())
                     
-                    inverted_mask = ~mask.bool()
+                    inverted_mask = 1 - mask.float()
 
                     local_params[name] = local_params[name].float()
                     local_params[name].add_(train_size * local_param.float() * inverted_mask.float())
@@ -345,6 +346,10 @@ class Client:
 dprint('Initializing clients...')
 clients = {}
 client_ids = []
+accuracy_history = []
+download_cost_history = []
+upload_cost_history = []
+
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, net=all_models[args.dataset],
@@ -452,30 +457,33 @@ for server_round in tqdm(range(args.rounds)):
             if args.fp16:
                 cl_weight_params[name] = cl_weight_params[name].to(torch.bfloat16).to(torch.float)
 
-        # 이 시점에서 클라이언트의 weight와 mask를 가지고 있음
-        # global mask에 따라 mask된 부분만 클라이언트 weight에서 받아와서 aggregate
+        # 클라이언트의 weight와 mask를 사용하여 aggregate
         for name, cl_param in cl_weight_params.items():
             if name in cl_mask_params:
-                # things like weights have masks
-                cl_mask = cl_mask_params[name]
-                sv_mask = global_params[name + '_mask'].to('cpu', copy=True)
+                # 클라이언트 mask와 global mask를 가져오기
+                cl_mask = cl_mask_params[name].to('cpu', copy=True)  # 클라이언트 mask
+                sv_mask = global_params[name + '_mask'].to('cpu', copy=True)  # 글로벌 mask
 
-                # global mask의 1에 해당하는 부분은 기존 global weight 사용
+                # 글로벌 weight을 가져오기
                 global_weight = global_params[name].to('cpu', copy=True)
 
-                # 클라이언트에서 받은 weight에서 global mask가 0인 부분만 합산
-                masked_cl_param = cl_param * (1 - sv_mask.float())  # 클라이언트에서 받은 부분 (mask가 0인 부분만)
-                global_weight_masked = global_weight * sv_mask.float()  # global weight에서 mask가 1인 부분
+                # 클라이언트 weight에서 global mask가 0인 부분만 합산
+                masked_cl_param = cl_param * (1 - sv_mask.float())
+                global_weight_masked = global_weight * sv_mask.float()
 
+                # 클라이언트 weight를 aggregate에 추가
                 aggregated_params[name].add_(client.train_size() * masked_cl_param)
-                aggregated_masks[name].add_(client.train_size() * (1 - sv_mask.float()))
 
                 # 기존 global weight에서 mask가 1인 부분은 그대로 유지
-                aggregated_params[name] += global_weight_masked
+                aggregated_params[name].add_(global_weight_masked)
+
+                # aggregated_masks 업데이트
+                aggregated_masks[name].add_(client.train_size() * (1 - sv_mask.float()))
 
             else:
                 # 마스크가 없는 경우 (e.g. biases), 클라이언트 weight를 그대로 사용
                 aggregated_params[name].add_(client.train_size() * cl_param)
+
 
     # aggregate된 파라미터에 대한 평균 계산
     for name, param in aggregated_params.items():
@@ -521,6 +529,11 @@ for server_round in tqdm(range(args.rounds)):
     if server_round % args.eval_every == 0 and args.eval:
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
+
+        accuracy_history.append(np.mean(list(accuracies.values())))
+        download_cost_history.append(sum(download_cost))
+        upload_cost_history.append(sum(upload_cost))
+
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:
