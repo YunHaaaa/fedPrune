@@ -9,8 +9,8 @@ import numpy as np
 import os
 import sys
 import time
-import pickle
 from copy import deepcopy
+import csv
 
 from tqdm import tqdm
 import warnings
@@ -74,20 +74,23 @@ parser.add_argument('--eval-every', default=10, type=int, help='Evaluate on test
 parser.add_argument('--device', default='0', type=device_list, help='Device to use for compute. Use "cpu" to force CPU. Otherwise, separate with commas to allow multi-GPU.')
 parser.add_argument('--min-votes', default=0, type=int, help='Minimum votes required to keep a weight')
 parser.add_argument('--no-eval', default=True, action='store_false', dest='eval')
-parser.add_argument('--grasp', default=False, action='store_true')
 parser.add_argument('--fp16', default=False, action='store_true', help='upload as fp16')
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
+# TODO: seed가 뽑히는 클라이언트와 데이터셋을 항상 똑같게 만들고 있지 않은지 확인 필요
+parser.add_argument('--seed', default=42, type=int, help='random seed')
 
 
 args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
 args.pid = os.getpid()
 
+rng = np.random.default_rng(args.seed)
+
+
 if args.rate_decay_end is None:
     args.rate_decay_end = args.rounds // 2
 if args.final_sparsity is None:
     args.final_sparsity = args.sparsity
-
 
 def print2(*arg, **kwargs):
     print(*arg, **kwargs, file=args.outfile)
@@ -225,7 +228,7 @@ class Client:
 
 
     def train(self, global_params=None, initial_global_params=None,
-              readjustment_ratio=0.5, server_round=0 ,readjust=False, sparsity=args.sparsity):
+              readjustment_ratio=args.readjustment_ratio, server_round=0, readjust=False, sparsity=args.sparsity):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
@@ -256,7 +259,7 @@ class Client:
         for epoch in range(self.local_epochs):
 
             self.net.train()
-
+            print("client start sparsity:", self.net.sparsity())
             running_loss = 0.
             for inputs, labels in self.train_data:
                 inputs = inputs.to(self.device)
@@ -264,6 +267,10 @@ class Client:
                 self.optimizer.zero_grad()
                 outputs = self.net(inputs, 4)
                 loss = self.criterion(outputs, labels)
+
+                if args.prox > 0:
+                    loss += args.prox / 2. * self.net.proximal_loss(global_params)
+
                 loss.backward()
                 self.optimizer.step()
                 
@@ -284,17 +291,19 @@ class Client:
                 if name.endswith('weight'):
                     mask = global_mask[name + '_mask']
                     
-                    train_size = float(client.train_size())
+                    train_size = float(self.train_size())
                     
-                    inverted_mask = 1 - mask.float()
-
-                    local_params[name] = local_params[name].float()
-                    local_params[name].add_(train_size * local_param.float() * inverted_mask.float())
+                    # 마스크 반전하여 클라이언트에서 받은 부분만 업데이트
+                    inverted_mask = (1 - mask.float())
+                    
+                    # 클라이언트의 로컬 파라미터에만 반영 (mask가 0인 부분)
+                    local_params[name] = local_params[name].float() * inverted_mask.float()
                 else:
-                    local_params[name] = local_params[name].float()
-                    local_params[name].add_(float(client.train_size()) * local_param.float())
-            
+                    local_params[name] = local_params[name].float() * float(self.train_size())
+                
+            # 최종적으로 파라미터를 글로벌 모델에 반영
             self.net.load_state_dict(local_params)
+
 
         # we only need to transmit the masked weights and all biases
         if args.fp16:
@@ -374,7 +383,8 @@ if args.pruning_method == 'dpf':
 
 elif args.pruning_method == 'prune_grow':
     global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-
+print(args.sparsity, global_model.sparsity())
+print("---------")
 initial_global_params = deepcopy(global_model.state_dict())
 
 # we need to accumulate compute/DL/UL costs regardless of round number, resetting only
@@ -388,7 +398,6 @@ for server_round in tqdm(range(args.rounds)):
 
     # sample clients
     client_indices = rng.choice(list(clients.keys()), size=args.clients)
-    initial_round = 1
 
     global_params = global_model.state_dict()
     aggregated_params = {}
@@ -396,6 +405,8 @@ for server_round in tqdm(range(args.rounds)):
     aggregated_masks = {}
     # set server parameters to 0 in preparation for aggregation,
     for name, param in global_params.items():
+        if name.endswith('_mask'):
+            continue
         aggregated_params[name] = torch.zeros_like(param, dtype=torch.float, device='cpu')
         aggregated_params_for_mask[name] = torch.zeros_like(param, dtype=torch.float, device='cpu')
         if needs_mask(name):
@@ -423,9 +434,10 @@ for server_round in tqdm(range(args.rounds)):
         # ...via linear interpolation
         if server_round <= args.rate_decay_end:   # rate_decay_end의 default는 false if false -> args.round // 2
             round_sparsity = args.sparsity * (args.rate_decay_end - server_round) / args.rate_decay_end + args.final_sparsity * server_round / args.rate_decay_end
+            print("rate_decay_end, round_sparsity", args.rate_decay_end, round_sparsity)
         else:
             round_sparsity = args.final_sparsity   # args.final_sparsity default는 false이고 if false -> args.sparsity
-                       
+            print("round_sparsity :", round_sparsity)    
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
                                     readjustment_ratio=readjustment_ratio, server_round=server_round,
@@ -438,7 +450,7 @@ for server_round in tqdm(range(args.rounds)):
         t1 = time.process_time()
         compute_times[i] = t1 - t0
         client.net.clear_gradients() # to save memory
-
+        print("client sparsity :", client.net.sparsity())
         # add this client's params to the aggregate
 
         cl_weight_params = {}
@@ -491,17 +503,30 @@ for server_round in tqdm(range(args.rounds)):
             # 마스크가 없는 경우 단순 평균 계산
             aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
             continue
-
+        
         # 마스크가 있는 경우, weighted average 계산
+        aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
         aggregated_params[name] /= aggregated_masks[name]
+        aggregated_params_for_mask[name] /= aggregated_masks[name]
+        aggregated_masks[name] /= aggregated_masks[name]
 
         # NaN 값 처리 (모든 클라이언트에서 pruning된 경우)
-        aggregated_params[name] = torch.nan_to_num(aggregated_params[name], nan=0.0, posinf=0.0, neginf=0.0)
+        aggregated_params[name] = torch.nan_to_num(aggregated_params[name],
+                                                   nan=0.0, posinf=0.0, neginf=0.0)
+        aggregated_params_for_mask[name] = torch.nan_to_num(aggregated_params[name],
+                                                   nan=0.0, posinf=0.0, neginf=0.0)
+        aggregated_masks[name] = torch.nan_to_num(aggregated_masks[name],
+                                                  nan=0.0, posinf=0.0, neginf=0.0)
 
-    # global model 업데이트
-    global_model.load_state_dict(aggregated_params)
+    # masks are parameters too!
+    for name, mask in aggregated_masks.items():
+        aggregated_params[name + '_mask'] = mask
+        aggregated_params_for_mask[name + '_mask'] = mask
 
-    # sparsity 유지: 서버에서 다시 pruning
+    # reset global params to aggregated values
+    global_model.load_state_dict(aggregated_params_for_mask)
+
+    print("before global pruning :", global_model.sparsity(), round_sparsity)
     if global_model.sparsity() < round_sparsity:
         if args.pruning_method == 'dpf':
             if args.dpf_type == 'structured':
@@ -545,7 +570,7 @@ for server_round in tqdm(range(args.rounds)):
                            batch_size=args.batch_size,
                            epochs=args.epochs,
                            target_sparsity=round_sparsity,
-                           pruning_rate=args.readjustment_ratio,
+                           pruning_rate=readjustment_ratio,
                            initial_pruning_threshold='',
                            final_pruning_threshold='',
                            pruning_threshold_growth_method='',
@@ -569,6 +594,25 @@ for server_round in tqdm(range(args.rounds)):
         compute_times[:] = 0
         download_cost[:] = 0
         upload_cost[:] = 0
+
+print2('OVERALL SUMMARY')
+print2()
+print2(f'{args.total_clients} clients, {args.clients} chosen each round')
+print2(f'E={args.epochs} local epochs per round, B={args.batch_size} mini-batch size')
+print2(f'{args.rounds} rounds of federated learning')
+# print2(f'Target sparsity r_target={args.target_sparsity}, pruning rate (per round) r_p={args.pruning_rate}')
+# print2(f'Accuracy threshold starts at {args.pruning_threshold} and ends at {args.final_pruning_threshold}')
+# print2(f'Accuracy threshold growth method "{args.pruning_threshold_growth_method}"')
+# print2(f'Pruning method: {args.pruning_method}, resetting weights: {args.reset_weights}')
+print2()
+
+accuracies = list(accuracies.values())
+sparsities = list(sparsities.values())
+print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
+print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
+print2()
+print2()
+
 
 filename = f"{args.outfile}.csv"
 
