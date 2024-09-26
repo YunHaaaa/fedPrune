@@ -87,17 +87,19 @@ if args.rate_decay_end is None:
 if args.final_sparsity is None:
     args.final_sparsity = args.sparsity
 
+
 def print2(*arg, **kwargs):
     print(*arg, **kwargs, file=args.outfile)
-
+    print(*arg, **kwargs)
+    
 def dprint(*args, **kwargs):
     print(*args, **kwargs, file=sys.stderr)
 
 def print_csv_line(**kwargs):
     print2(','.join(str(x) for x in kwargs.values()))
 
-    for key, value in kwargs.items():
-        print(f"{key}: {value}")
+    # for key, value in kwargs.items():
+    #     print(f"{key}: {value}")
 
 def nan_to_num(x, nan=0, posinf=0, neginf=0):
     x = x.clone()
@@ -259,7 +261,7 @@ class Client:
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
-                outputs = self.net(inputs,4)
+                outputs = self.net(inputs, 4)
                 loss = self.criterion(outputs, labels)
                 loss.backward()
                 self.optimizer.step()
@@ -268,39 +270,30 @@ class Client:
                 
                 running_loss += loss.item()
 
-
-            # if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
-            #     prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-            #     # recompute gradient if we used FedProx penalty
-            #     self.optimizer.zero_grad()
-            #     outputs = self.net(inputs)
-            #     self.criterion(outputs, labels).backward()
-
-            #     self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
-            #     self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-            #     ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
             self.curr_epoch += 1
-        
-        if server_round == 0:
-            pass
-        else:
+            
+        if server_round != 0:
             local_params = self.net.state_dict()
+            
             for name, mask_params in global_params.items():
                 if name.endswith('mask'):
                     global_mask[name] = mask_params
-                    # global_mask[name + '_mask'] = global_mask[name + '_mask'].to(device=device, copy=True)
-                    # inverse_mask[name] = ~mask_params
-                
-            # global_mask[name] = global_mask[name].to(device='cpu', copy=True)
-            for name, local_param in self.net.items():
+            
+            for name, local_param in self.net.state_dict().items():
                 if name.endswith('weight'):
-                    local_params[name].add_(client.train_size() * local_param * ~global_mask[name + '_mask'])
+                    mask = global_mask[name + '_mask']
+                    
+                    train_size = float(client.train_size())
+                    
+                    inverted_mask = ~mask.bool()
+
+                    local_params[name] = local_params[name].float()
+                    local_params[name].add_(train_size * local_param.float() * inverted_mask.float())
                 else:
-                    local_params[name].add_(client.train_size() * local_param)
+                    local_params[name] = local_params[name].float()
+                    local_params[name].add_(float(client.train_size()) * local_param.float())
             
             self.net.load_state_dict(local_params)
-            
-
 
         # we only need to transmit the masked weights and all biases
         if args.fp16:
@@ -309,8 +302,8 @@ class Client:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
         ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
-        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
-        #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        # dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
+        # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         return ret
 
     def test(self, model=None, n_batches=0):
@@ -336,7 +329,7 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                outputs = _model(inputs,4)
+                outputs = _model(inputs, 4)
                 outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
                 total += len(labels)
@@ -365,29 +358,17 @@ for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
 global_model = all_models[args.dataset](device='cpu')
 initialize_mask(global_model)
 
-# execute grasp on one client if needed
-# if args.grasp:
-#     client = clients[client_ids[0]]
-#     from grasp import grasp
-#     pruned_net = grasp(client, sparsity=args.sparsity, dataset=args.dataset)
-#     pruned_masks = {}
-#     pruned_params = {}
-#     for cname, ch in pruned_net.named_children():
-#         for bname, buf in ch.named_buffers():
-#             if bname == 'weight_mask':
-#                 pruned_masks[cname] = buf.to(device=torch.device('cpu'), dtype=torch.bool)
-#         for pname, param in ch.named_parameters():
-#             pruned_params[(cname, pname)] = param.to(device=torch.device('cpu'))
-#     for cname, ch in global_model.named_children():
-#         for bname, buf in ch.named_buffers():
-#             if bname == 'weight_mask':
-#                 buf.copy_(pruned_masks[cname])
-#         for pname, param in ch.named_parameters():
-#             param.data.copy_(pruned_params[(cname, pname)])
-            
+if args.pruning_method == 'dpf':
+    if args.dpf_type == 'structured':
+        filter_mask = utils.get_filter_mask(global_model, args.sparsity, args)
+        utils.filter_prune(global_model, filter_mask)
+    else:
+        threshold = utils.get_weight_threshold(global_model, args.sparsity, args)
+        utils.weight_prune(global_model, threshold, args)
+    # utils.random_prune(global_model, args.random_pruning_rate)
 
-# else:
-#     global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution)
+elif args.pruning_method == 'prune_grow':
+    global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
 initial_global_params = deepcopy(global_model.state_dict())
 
@@ -411,9 +392,9 @@ for server_round in tqdm(range(args.rounds)):
     # set server parameters to 0 in preparation for aggregation,
     for name, param in global_params.items():
         aggregated_params[name] = torch.zeros_like(param, dtype=torch.float, device='cpu')
-        # aggregated_params_for_mask[name] = torch.zeros_like(param, dtype=torch.float, device='cpu')
-        # if needs_mask(name):
-        #     aggregated_masks[name] = torch.zeros_like(param, device='cpu')
+        aggregated_params_for_mask[name] = torch.zeros_like(param, dtype=torch.float, device='cpu')
+        if needs_mask(name):
+            aggregated_masks[name] = torch.zeros_like(param, device='cpu')
 
     # for each client k \in S_t in parallel do
     total_sampled = 0
@@ -429,21 +410,22 @@ for server_round in tqdm(range(args.rounds)):
         else:
             readjustment_ratio = args.readjustment_ratio
 
-        # readjust = (server_round - 1) % args.rounds_between_readjustments == 0 and readjustment_ratio > 0.
-        # if readjust:
-        #     dprint('readjusting', readjustment_ratio)
+        readjust = (server_round - 1) % args.rounds_between_readjustments == 0 and readjustment_ratio > 0.
+        if readjust:
+            dprint('readjusting', readjustment_ratio)
 
         # determine sparsity desired at the end of this round
         # ...via linear interpolation
-        # if server_round <= args.rate_decay_end:   # rate_decay_end의 default는 false if false -> args.round // 2
-        #     round_sparsity = args.sparsity * (args.rate_decay_end - server_round) / args.rate_decay_end + args.final_sparsity * server_round / args.rate_decay_end
-        # else:
-        round_sparsity = args.final_sparsity   # args.final_sparsity default는 false이고 if false -> args.sparsity
+        if server_round <= args.rate_decay_end:   # rate_decay_end의 default는 false if false -> args.round // 2
+            round_sparsity = args.sparsity * (args.rate_decay_end - server_round) / args.rate_decay_end + args.final_sparsity * server_round / args.rate_decay_end
+        else:
+            round_sparsity = args.final_sparsity   # args.final_sparsity default는 false이고 if false -> args.sparsity
                        
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
                                     readjustment_ratio=readjustment_ratio,server_round = server_round,
                                     readjust=True, sparsity=round_sparsity)
+         
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
         upload_cost[i] = train_result['ul_cost']
@@ -456,77 +438,47 @@ for server_round in tqdm(range(args.rounds)):
 
         cl_weight_params = {}
         cl_mask_params = {}
-        inverse_mask = {}
 
         # first deduce masks for the received weights
         for name, cl_param in cl_params.items():
-            cl_params[name] = cl_param.to(device='cpu', copy=True)
-        #     if name.endswith('_orig'):
-        #         name = name[:-5]
-        #     elif name.endswith('_mask'):
-        #         name = name[:-5]
-        #         cl_mask_params[name] = cl_param.to(device='cpu', copy=True)
-        #         continue
+            if name.endswith('_orig'):
+                name = name[:-5]
+            elif name.endswith('_mask'):
+                name = name[:-5]
+                cl_mask_params[name] = cl_param.to(device='cpu', copy=True)
+                continue
 
-        #     cl_weight_params[name] = cl_param.to(device='cpu', copy=True)
-        #     if args.fp16:
-        #         cl_weight_params[name] = cl_weight_params[name].to(torch.bfloat16).to(torch.float)
+            cl_weight_params[name] = cl_param.to(device='cpu', copy=True)
+            if args.fp16:
+                cl_weight_params[name] = cl_weight_params[name].to(torch.bfloat16).to(torch.float)
 
         # at this point, we have weights and masks (possibly all-ones)
         # for this client. we will proceed by applying the mask and adding
         # the masked received weights to the aggregate, and adding the mask
-        # to the aggregate as well.
-        
-        # mask_params = {key: value for key, value in global_params.items() if key.endswith('_mask')}
-        
-        # for name, mask_params in mask_params.items():
-        #     if name.endswith('mask'):
-        #         global_mask[name] = mask_params
-        #         # global_mask[name + '_mask'] = global_mask[name + '_mask'].to(device=device, copy=True)
-        #         # inverse_mask[name] = ~mask_params
-                
-        #     global_mask[name] = global_mask[name].to(device='cpu', copy=True)
-    
-            
-        
+        # to the aggregate as well.     
         for name, cl_param in cl_params.items():
-            # if initial_round == 1:
-            #     aggregated_params[name].add_(client.train_size() * cl_param )
-                aggregated_params[name] = aggregated_params[name].to(device='cpu', copy=True)
-                aggregated_params[name].add_(client.train_size() * cl_param)
-            # else:
-                # if name.endswith('weight'):
-                #     aggregated_params[name].add_(client.train_size() * cl_param * ~global_mask[name + '_mask'])
-                # else:
-                   
-                
-                
-    
-            
-
-            
-           
-                
+            if name in cl_mask_params:
                 # things like weights have masks
-            #     cl_mask = cl_mask_params[name]
-            #     sv_mask = global_params[name + '_mask'].to('cpu', copy=True)
+                cl_mask = cl_mask_params[name]
+                sv_mask = global_params[name + '_mask'].to('cpu', copy=True)
 
-            #     # calculate Hamming distance of masks for debugging
-            #     if readjust:
-            #         dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
+                # calculate Hamming distance of masks for debugging
+                if readjust:
+                    dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
 
-            #     aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
-            #     aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
-            #     aggregated_masks[name].add_(client.train_size() * cl_mask)
-            #     if args.remember_old:
-            #         sv_mask[cl_mask] = 0
-            #         sv_param = global_params[name].to('cpu', copy=True)
-
-            #         aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
-            #         aggregated_masks[name].add_(client.train_size() * sv_mask)
-            # else:
-            #     # things like biases don't have masks
+                aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
+                aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
+                aggregated_masks[name].add_(client.train_size() * cl_mask)
                 
+                if args.remember_old:
+                    sv_mask[cl_mask] = 0
+                    sv_param = global_params[name].to('cpu', copy=True)
+                    aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
+                    aggregated_masks[name].add_(client.train_size() * sv_mask)
+            else:
+                # things like biases don't have masks
+                aggregated_params[name].add_(client.train_size() * cl_param)
+
 
     # at this point, we have the sum of client parameters
     # in aggregated_params, and the sum of masks in aggregated_masks. We
@@ -534,54 +486,66 @@ for server_round in tqdm(range(args.rounds)):
     for name, param in aggregated_params.items():
 
         # if this parameter has no associated mask, simply take the average.
-        aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
-        
+        if name not in aggregated_masks:
+            aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
+            continue        
 
         # drop parameters with not enough votes
-        # aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
+        aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
 
         # otherwise, we are taking the weighted average w.r.t. the number of 
         # samples present on each of the clients.
-        # aggregated_params[name] /= aggregated_masks[name]
-        # aggregated_params_for_mask[name] /= aggregated_masks[name]
-        # aggregated_masks[name] /= aggregated_masks[name]
+        aggregated_params[name] /= aggregated_masks[name]
+        aggregated_params_for_mask[name] /= aggregated_masks[name]
+        aggregated_masks[name] /= aggregated_masks[name]
 
         # it's possible that some weights were pruned by all clients. In this
         # case, we will have divided by zero. Those values have already been
         # pruned out, so the values here are only placeholders.
         aggregated_params[name] = torch.nan_to_num(aggregated_params[name],
                                                    nan=0.0, posinf=0.0, neginf=0.0)
-        # aggregated_params_for_mask[name] = torch.nan_to_num(aggregated_params[name],
-        #                                            nan=0.0, posinf=0.0, neginf=0.0)
-        # aggregated_masks[name] = torch.nan_to_num(aggregated_masks[name],
-        #                                           nan=0.0, posinf=0.0, neginf=0.0)
+        aggregated_params_for_mask[name] = torch.nan_to_num(aggregated_params[name],
+                                                   nan=0.0, posinf=0.0, neginf=0.0)
+        aggregated_masks[name] = torch.nan_to_num(aggregated_masks[name],
+                                                  nan=0.0, posinf=0.0, neginf=0.0)
 
     # masks are parameters too!
-    # for name, mask in aggregated_masks.items():
-    #     aggregated_params[name + '_mask'] = mask
-    #     aggregated_params_for_mask[name + '_mask'] = mask
+    for name, mask in aggregated_masks.items():
+        aggregated_params[name + '_mask'] = mask
+        aggregated_params_for_mask[name + '_mask'] = mask
 
     # reset global params to aggregated values
-    if server_round == 0:
-        pass
-        
-    else:
-        for name, param in aggregated_params.items():
-            global_params[name] = global_params[name].to(device='cpu', copy=True)
-            aggregated_params[name] += global_params[name]
-        
-    
-    global_model.load_state_dict(aggregated_params)
-    global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
-       
+    global_model.load_state_dict(aggregated_params_for_mask)
+
+    if global_model.sparsity() < round_sparsity:
+        # we now have denser networks than we started with at the beginning of
+        # the round. reprune on the server to get back to the desired sparsity.
+        # we use layer-wise magnitude pruning as before.
+
+        if args.pruning_method == 'dpf':
+            if args.dpf_type == 'structured':
+                filter_mask = utils.get_filter_mask(global_model, round_sparsity, args)
+                utils.filter_prune(global_model, filter_mask)
+            else:
+                threshold = utils.get_weight_threshold(global_model, round_sparsity, args)
+                utils.weight_prune(global_model, threshold, args)
+            # utils.random_prune(global_model, args.random_pruning_rate)
+
+        elif args.pruning_method == 'prune_grow':
+            global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+
     # discard old weights and apply new mask
-    # global_params = global_model.state_dict()
-    # for name, mask in aggregated_params.items():
-    #     new_mask = global_params[name + '_mask']
-    #     aggregated_params[name + '_mask'] = new_mask
-    #     aggregated_params[name][~new_mask] = 0
+    global_params = global_model.state_dict()
+    for name, mask in aggregated_masks.items():
+        new_mask = global_params[name + '_mask']
         
-    # global_model.load_state_dict(aggregated_params)
+        if args.pruning_type == 'soft':
+            aggregated_params[name + '_mask'] = new_mask
+        else:
+            aggregated_params[name + '_mask'] = new_mask
+            aggregated_params[name][~new_mask] = 0
+
+    global_model.load_state_dict(aggregated_params)
 
     # evaluate performance
     torch.cuda.empty_cache()
@@ -625,18 +589,21 @@ for server_round in tqdm(range(args.rounds)):
         download_cost[:] = 0
         upload_cost[:] = 0
 
-#print2('OVERALL SUMMARY')
-#print2()
-#print2(f'{args.total_clients} clients, {args.clients} chosen each round')
-#print2(f'E={args.epochs} local epochs per round, B={args.batch_size} mini-batch size')
-#print2(f'{args.rounds} rounds of federated learning')
-#print2(f'Target sparsity r_target={args.target_sparsity}, pruning rate (per round) r_p={args.pruning_rate}')
-#print2(f'Accuracy threshold starts at {args.pruning_threshold} and ends at {args.final_pruning_threshold}')
-#print2(f'Accuracy threshold growth method "{args.pruning_threshold_growth_method}"')
-#print2(f'Pruning method: {args.pruning_method}, resetting weights: {args.reset_weights}')
-#print2()
-accuracies = list(accuracies.values())
-print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
-#print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
-#print2()
-#print2()
+filename = f"{args.outfile}.csv"
+
+with open(filename, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    
+    writer.writerow(['Round', 'Accuracy (%)', 'Download Cost', 'Upload Cost'])
+    
+    for i in range(1, len(accuracy_history)):
+        round_num = i * args.eval_every
+        accuracy = accuracy_history[i] * 100  # 퍼센트로 변환
+        download_cost = download_cost_history[i]
+        upload_cost = upload_cost_history[i]
+        
+        writer.writerow([round_num, accuracy, download_cost, upload_cost])
+
+print2('Training history saved to', filename)
+
+print2('Training Complete')
