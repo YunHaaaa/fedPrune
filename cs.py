@@ -423,13 +423,13 @@ for server_round in tqdm(range(args.rounds)):
                        
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
-                                    readjustment_ratio=readjustment_ratio,server_round = server_round,
+                                    readjustment_ratio=readjustment_ratio, server_round=server_round,
                                     readjust=True, sparsity=round_sparsity)
-         
+
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
         upload_cost[i] = train_result['ul_cost']
-            
+
         t1 = time.process_time()
         compute_times[i] = t1 - t0
         client.net.clear_gradients() # to save memory
@@ -452,76 +452,49 @@ for server_round in tqdm(range(args.rounds)):
             if args.fp16:
                 cl_weight_params[name] = cl_weight_params[name].to(torch.bfloat16).to(torch.float)
 
-        # at this point, we have weights and masks (possibly all-ones)
-        # for this client. we will proceed by applying the mask and adding
-        # the masked received weights to the aggregate, and adding the mask
-        # to the aggregate as well.     
-        for name, cl_param in cl_params.items():
+        # 이 시점에서 클라이언트의 weight와 mask를 가지고 있음
+        # global mask에 따라 mask된 부분만 클라이언트 weight에서 받아와서 aggregate
+        for name, cl_param in cl_weight_params.items():
             if name in cl_mask_params:
                 # things like weights have masks
                 cl_mask = cl_mask_params[name]
                 sv_mask = global_params[name + '_mask'].to('cpu', copy=True)
 
-                # calculate Hamming distance of masks for debugging
-                if readjust:
-                    dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
+                # global mask의 1에 해당하는 부분은 기존 global weight 사용
+                global_weight = global_params[name].to('cpu', copy=True)
 
-                aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
-                aggregated_params_for_mask[name].add_(client.train_size() * cl_param * cl_mask)
-                aggregated_masks[name].add_(client.train_size() * cl_mask)
-                
-                if args.remember_old:
-                    sv_mask[cl_mask] = 0
-                    sv_param = global_params[name].to('cpu', copy=True)
-                    aggregated_params_for_mask[name].add_(client.train_size() * sv_param * sv_mask)
-                    aggregated_masks[name].add_(client.train_size() * sv_mask)
+                # 클라이언트에서 받은 weight에서 global mask가 0인 부분만 합산
+                masked_cl_param = cl_param * (1 - sv_mask.float())  # 클라이언트에서 받은 부분 (mask가 0인 부분만)
+                global_weight_masked = global_weight * sv_mask.float()  # global weight에서 mask가 1인 부분
+
+                aggregated_params[name].add_(client.train_size() * masked_cl_param)
+                aggregated_masks[name].add_(client.train_size() * (1 - sv_mask.float()))
+
+                # 기존 global weight에서 mask가 1인 부분은 그대로 유지
+                aggregated_params[name] += global_weight_masked
+
             else:
-                # things like biases don't have masks
+                # 마스크가 없는 경우 (e.g. biases), 클라이언트 weight를 그대로 사용
                 aggregated_params[name].add_(client.train_size() * cl_param)
 
-
-    # at this point, we have the sum of client parameters
-    # in aggregated_params, and the sum of masks in aggregated_masks. We
-    # can take the average now by simply dividing...
+    # aggregate된 파라미터에 대한 평균 계산
     for name, param in aggregated_params.items():
-
-        # if this parameter has no associated mask, simply take the average.
         if name not in aggregated_masks:
+            # 마스크가 없는 경우 단순 평균 계산
             aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
-            continue        
+            continue
 
-        # drop parameters with not enough votes
-        aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
-
-        # otherwise, we are taking the weighted average w.r.t. the number of 
-        # samples present on each of the clients.
+        # 마스크가 있는 경우, weighted average 계산
         aggregated_params[name] /= aggregated_masks[name]
-        aggregated_params_for_mask[name] /= aggregated_masks[name]
-        aggregated_masks[name] /= aggregated_masks[name]
 
-        # it's possible that some weights were pruned by all clients. In this
-        # case, we will have divided by zero. Those values have already been
-        # pruned out, so the values here are only placeholders.
-        aggregated_params[name] = torch.nan_to_num(aggregated_params[name],
-                                                   nan=0.0, posinf=0.0, neginf=0.0)
-        aggregated_params_for_mask[name] = torch.nan_to_num(aggregated_params[name],
-                                                   nan=0.0, posinf=0.0, neginf=0.0)
-        aggregated_masks[name] = torch.nan_to_num(aggregated_masks[name],
-                                                  nan=0.0, posinf=0.0, neginf=0.0)
+        # NaN 값 처리 (모든 클라이언트에서 pruning된 경우)
+        aggregated_params[name] = torch.nan_to_num(aggregated_params[name], nan=0.0, posinf=0.0, neginf=0.0)
 
-    # masks are parameters too!
-    for name, mask in aggregated_masks.items():
-        aggregated_params[name + '_mask'] = mask
-        aggregated_params_for_mask[name + '_mask'] = mask
+    # global model 업데이트
+    global_model.load_state_dict(aggregated_params)
 
-    # reset global params to aggregated values
-    global_model.load_state_dict(aggregated_params_for_mask)
-
+    # sparsity 유지: 서버에서 다시 pruning
     if global_model.sparsity() < round_sparsity:
-        # we now have denser networks than we started with at the beginning of
-        # the round. reprune on the server to get back to the desired sparsity.
-        # we use layer-wise magnitude pruning as before.
-
         if args.pruning_method == 'dpf':
             if args.dpf_type == 'structured':
                 filter_mask = utils.get_filter_mask(global_model, round_sparsity, args)
@@ -529,22 +502,18 @@ for server_round in tqdm(range(args.rounds)):
             else:
                 threshold = utils.get_weight_threshold(global_model, round_sparsity, args)
                 utils.weight_prune(global_model, threshold, args)
-            # utils.random_prune(global_model, args.random_pruning_rate)
-
         elif args.pruning_method == 'prune_grow':
             global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
-    # discard old weights and apply new mask
+    # 새로운 global mask 적용
     global_params = global_model.state_dict()
     for name, mask in aggregated_masks.items():
         new_mask = global_params[name + '_mask']
-        
-        if args.pruning_type == 'soft':
-            aggregated_params[name + '_mask'] = new_mask
-        else:
-            aggregated_params[name + '_mask'] = new_mask
-            aggregated_params[name][~new_mask] = 0
+        aggregated_params[name + '_mask'] = new_mask
+        if args.pruning_type != 'soft':
+            aggregated_params[name][~new_mask] = 0  # 마스크가 0인 부분은 0으로 설정
 
+    # global model의 업데이트된 파라미터 로드
     global_model.load_state_dict(aggregated_params)
 
     # evaluate performance
@@ -552,7 +521,6 @@ for server_round in tqdm(range(args.rounds)):
     if server_round % args.eval_every == 0 and args.eval:
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
-
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:
