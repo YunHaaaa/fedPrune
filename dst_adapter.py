@@ -166,7 +166,12 @@ def load_model(args):
     else:
         raise ValueError("Unsupported dataset type")
 
-    colearner_model = models.CoLearner(in_channels=args.hidden_size, out_features=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
+    colearner_model = models.CoLearner(
+        in_channels=args.hidden_size[1],  # Correctly pass the second element as in_channels
+        out_features=args.num_ways,
+        hidden_size=args.hidden_size,
+        wh_size=wh_size
+    )
 
     return model, colearner_model
 

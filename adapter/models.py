@@ -601,16 +601,28 @@ class CoLearner(PrunableNet):
         # Co-learner
         self.conv1 = nn.Conv2d(in_channels=hidden_size[1], out_channels=hidden_size[1], kernel_size=5)
         self.conv2 = nn.Conv2d(hidden_size[1], hidden_size[1], 5)
-        self.fc1 = nn.Linear(hidden_size[1] * wh_size, out_features)
+        
+        # To determine the input size for fc1, pass a dummy input through conv layers
+        dummy_input = torch.zeros(1, hidden_size[1], wh_size, wh_size)
+        x = F.relu(F.max_pool2d(self.conv1(dummy_input), 3, stride=1))
+        x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
+        flattened_size = x.numel()
+
+        self.fc1 = nn.Linear(flattened_size, out_features)
 
     def forward(self, inputs):
+        # print(inputs.shape)
         x = F.relu(F.max_pool2d(self.conv1(inputs), 3, stride=1))
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
+        # print(x.shape)
         x = x.view(-1, self.num_flat_features(x))
         features = x
-
+        # print(x.shape)
         logits = F.softmax(self.fc1(x), dim=1)
 
+        # torch.Size([32, 16, 20, 20])
+        # torch.Size([32, 16, 8, 8])
+        # torch.Size([32, 1024])
         return features, logits
 
 
