@@ -299,6 +299,24 @@ class Client:
                 self.reset_weights()
                 self.co_reset_weights()
 
+            if epoch == int(self.local_epochs * pruning_ratio) - 1:
+                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
+                # recompute gradient if we used FedProx penalty
+                self.optimizer.zero_grad()
+                self.co_optimizer.zero_grad()
+
+                outputs = self.net(inputs)
+                co_outputs = self.co_net(inputs)
+                
+                self.criterion(outputs, labels).backward()
+                self.criterion(co_outputs, labels).backward()
+
+                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+                
+                self.co_net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+                self.co_net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+
             self.curr_epoch += 1
             
         # we only need to transmit the masked weights and all biases
