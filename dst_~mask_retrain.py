@@ -215,7 +215,6 @@ class Client:
     def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio,
               readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
         '''Train the client network for a single round.'''
-
         ul_cost = 0
         dl_cost = 0
 
@@ -253,7 +252,7 @@ class Client:
                     outputs = self.net(inputs, 4)
                 # TODO: type value 3, over 5
                 else:
-                    outputs = self.net(inputs, args.type_value)
+                    outputs = self.net(inputs, 4)
                 loss = self.criterion(outputs, labels)
 
                 if args.prox > 0:
@@ -272,12 +271,13 @@ class Client:
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
-                outputs = self.net(inputs, 2)
+                outputs = self.net(inputs, 4)
                 self.criterion(outputs, labels).backward()
 
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                # print(self.net.sparsity())
                 self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                
+                # print(prune_sparsity, sparsity, self.net.sparsity())
                 ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
                 
             self.curr_epoch += 1
