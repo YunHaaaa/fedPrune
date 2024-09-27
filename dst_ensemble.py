@@ -187,7 +187,6 @@ class Client:
         self.reset_optimizer()
 
         self.local_epochs = local_epochs
-        self.curr_epoch = 0
 
         # save the initial global params given to us by the server
         # for LTH pruning later.
@@ -299,26 +298,17 @@ class Client:
                 self.reset_weights()
                 self.co_reset_weights()
 
-            if epoch == int(self.local_epochs * pruning_ratio) - 1:
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-                # recompute gradient if we used FedProx penalty
-                self.optimizer.zero_grad()
-                self.co_optimizer.zero_grad()
+        prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
+        # recompute gradient if we used FedProx penalty
+        self.optimizer.zero_grad()
 
-                outputs = self.net(inputs)
-                co_outputs = self.co_net(inputs)
-                
-                self.criterion(outputs, labels).backward()
-                self.criterion(co_outputs, labels).backward()
+        outputs = self.net(inputs)
 
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                
-                self.co_net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-                self.co_net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+        self.criterion(outputs, labels).backward()
 
-            self.curr_epoch += 1
-            
+        self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+        self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
@@ -338,7 +328,6 @@ class Client:
         n_batches - number of minibatches to test on, or 0 for all of them
         '''
         correct = 0.
-        co_correct = 0.
         total = 0.
 
         if model is None:
