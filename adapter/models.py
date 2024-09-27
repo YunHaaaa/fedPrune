@@ -616,14 +616,13 @@ class CoLearner(PrunableNet):
         x = F.relu(F.max_pool2d(self.conv2(x), 3, stride=1))
         # print(x.shape)
         x = x.view(-1, self.num_flat_features(x))
-        features = x
         # print(x.shape)
         logits = F.softmax(self.fc1(x), dim=1)
 
         # torch.Size([32, 16, 20, 20])
         # torch.Size([32, 16, 8, 8])
         # torch.Size([32, 1024])
-        return features, logits
+        return logits
 
 
 all_models = {

@@ -288,7 +288,7 @@ class Client:
                 self.co_optimizer.zero_grad()
 
                 features, logit = self.net(inputs)
-                _, co_logit = self.co_learner_net(features)
+                co_logit = self.co_learner_net(features)
 
                 loss = self.criterion(logit, labels)
                 co_loss = self.criterion(co_logit, labels)
@@ -366,7 +366,7 @@ class Client:
                     labels = labels.to(self.device)
 
                 feature, logit = _model(inputs)
-                _, co_logit = _co_model(feature)
+                co_logit = _co_model(feature)
 
                 outputs = torch.argmax(logit, dim=-1)
                 co_outputs = torch.argmax(co_logit, dim=-1)
