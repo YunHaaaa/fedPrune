@@ -25,3 +25,9 @@ Run `git submodule init` followed by `git submodule update` to download the data
 | PruneFL on MNIST | `python3 prunefl.py --dataset mnist --rounds-between-readjustments 50 --initial-rounds 1000` |
 | FedDST on MNIST (S=0.8) | `python3 dst.py --dataset mnist --sparsity 0.8 --readjustment-ratio 0.05` |
 | Ours on MNIST (S=0.8) | `python3 ours.py --dataset mnist --sparsity 0.8 --readjustment-ratio 0.05 -o ours.log` |
+| CS on CIFAR-10 (S=0.8) | `python3 cs.py --dataset cifar10 --sparsity 0.8 --readjustment-ratio 0.05 -o cs_cifar_0.8.log` |
+| Dhr on CIFAR-10 (S=0.8) | `python3 dst_hard_retrain.py --dataset cifar10 --sparsity 0.8 --pruning-type soft --outfile dhr_cifar_0.8_soft.log` |
+| De on CIFAR-10 (S=0.8) | `python3 dst_ensemble.py --dataset cifar10 --sparsity 0.8  --outfile de_cifar_0.8.log` |
+| Dmr on CIFAR-10 (S=0.8) | `python3 dst_~mask_retrain.py --dataset cifar10 --sparsity 0.8 --pruning-type soft --type-value 5 --outfile dmr_cifar_0.8_soft_7:3_tv5.log` |
+| Adapter on CIFAR-10 (S=0.8) | `python3 dst_adapter.py --dataset cifar10 --sparsity 0.8 --outfile da_cifar_0.8.log --hidden-size 6 16 --wh-size 20 --num-ways 10` |
+| Adapter on MNIST (S=0.8) | `python3 dst_adapter.py --dataset mnist --sparsity 0.8 --outfile da_mnist_0.8.log --hidden-size 10 20 --wh-size 16 --num-ways 10` |

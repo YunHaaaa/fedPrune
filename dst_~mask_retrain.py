@@ -215,14 +215,13 @@ class Client:
     def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio,
               readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
         '''Train the client network for a single round.'''
-
         ul_cost = 0
         dl_cost = 0
 
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
             # the client's weights every round
-            mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True)
+            mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True, pruning_type=args.pruning_type)
 
             # Try to reset the optimizer state.
             self.reset_optimizer()
@@ -249,11 +248,11 @@ class Client:
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
                 
-                if epoch >= args.pruning_begin:
-                    outputs = self.net(inputs, 2)
+                if epoch > args.pruning_begin:
+                    outputs = self.net(inputs, 4)
                 # TODO: type value 3, over 5
                 else:
-                    outputs = self.net(inputs, args.type_value)
+                    outputs = self.net(inputs, 4)
                 loss = self.criterion(outputs, labels)
 
                 if args.prox > 0:
@@ -262,6 +261,9 @@ class Client:
                 loss.backward()
                 self.optimizer.step()
 
+                if epoch > args.pruning_begin:
+                    self.reset_weights() # applies the mask
+
                 running_loss += loss.item()
             
             if epoch == args.pruning_begin:
@@ -269,12 +271,13 @@ class Client:
                 prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
                 # recompute gradient if we used FedProx penalty
                 self.optimizer.zero_grad()
-                outputs = self.net(inputs, 2)
+                outputs = self.net(inputs, 4)
                 self.criterion(outputs, labels).backward()
 
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+                # print(self.net.sparsity())
                 self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                
+                # print(prune_sparsity, sparsity, self.net.sparsity())
                 ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
                 
             self.curr_epoch += 1
@@ -315,7 +318,7 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                outputs = _model(inputs, 2)
+                outputs = _model(inputs, 4)
                 outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
                 total += len(labels)
@@ -460,6 +463,8 @@ for server_round in tqdm(range(args.rounds)):
                     dprint(f'{client.id} {name} d_h=', torch.sum(cl_mask ^ sv_mask).item())
 
                 if args.pruning_type == 'soft':
+                    aggregated_params[name].add_(client.train_size() * cl_param)
+                    aggregated_params_for_mask[name].add_(client.train_size() * cl_param)
                     aggregated_masks[name].add_(client.train_size() * cl_mask)
                 else:
                     aggregated_params[name].add_(client.train_size() * cl_param * cl_mask)
@@ -485,19 +490,14 @@ for server_round in tqdm(range(args.rounds)):
             aggregated_params[name] /= sum(clients[i].train_size() for i in client_indices)
             continue
 
-        if args.pruning_type == 'soft':
-            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
-            aggregated_masks[name] /= aggregated_masks[name]
+        # drop parameters with not enough votes
+        aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
 
-        else:
-            # drop parameters with not enough votes
-            aggregated_masks[name] = F.threshold_(aggregated_masks[name], args.min_votes, 0)
-
-            # otherwise, we are taking the weighted average w.r.t. the number of 
-            # samples present on each of the clients.
-            aggregated_params[name] /= aggregated_masks[name]
-            aggregated_params_for_mask[name] /= aggregated_masks[name]
-            aggregated_masks[name] /= aggregated_masks[name]
+        # otherwise, we are taking the weighted average w.r.t. the number of 
+        # samples present on each of the clients.
+        aggregated_params[name] /= aggregated_masks[name]
+        aggregated_params_for_mask[name] /= aggregated_masks[name]
+        aggregated_masks[name] /= aggregated_masks[name]
 
         # it's possible that some weights were pruned by all clients. In this
         # case, we will have divided by zero. Those values have already been
@@ -539,10 +539,9 @@ for server_round in tqdm(range(args.rounds)):
     for name, mask in aggregated_masks.items():
         new_mask = global_params[name + '_mask']
         
-        if args.pruning_type == 'soft':
-            aggregated_params[name + '_mask'] = new_mask
-        else:
-            aggregated_params[name + '_mask'] = new_mask
+        aggregated_params[name + '_mask'] = new_mask
+        
+        if args.pruning_type == 'hard':
             aggregated_params[name][~new_mask] = 0
 
     global_model.load_state_dict(aggregated_params)

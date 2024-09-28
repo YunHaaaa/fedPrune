@@ -13,8 +13,8 @@ import csv
 from tqdm import tqdm
 
 from datasets import get_dataset
-import adapter.models as models
-from adapter.models import all_models, needs_mask, initialize_mask
+import models
+from models import all_models, needs_mask, initialize_mask
 
 def device_list(x):
     if x == 'cpu':
@@ -105,7 +105,6 @@ def nan_to_num(x, nan=0, posinf=0, neginf=0):
 def evaluate_global(clients, global_model, progress=False, n_batches=0):
     with torch.no_grad():
         accuracies = {}
-        co_accuracies = {}
         sparsities = {}
 
         if progress:
@@ -114,12 +113,11 @@ def evaluate_global(clients, global_model, progress=False, n_batches=0):
             enumerator = clients.items()
 
         for client_id, client in enumerator:
-            accuracy, co_accuracy = client.test(model=global_model)
+            accuracy = client.test(model=global_model)
             accuracies[client_id] = accuracy.item()
-            co_accuracies[client_id] = co_accuracy.item()
             sparsities[client_id] = client.sparsity()
 
-    return accuracies, co_accuracies, sparsities
+    return accuracies, sparsities
 
 
 def evaluate_local(clients, global_model, progress=False, n_batches=0):
@@ -127,7 +125,6 @@ def evaluate_local(clients, global_model, progress=False, n_batches=0):
     # we need to perform an update to client's weights.
     with torch.no_grad():
         accuracies = {}
-        co_accuracies = {}
         sparsities = {}
 
         if progress:
@@ -137,44 +134,11 @@ def evaluate_local(clients, global_model, progress=False, n_batches=0):
 
         for client_id, client in enumerator:
             client.reset_weights(global_state=global_model.state_dict(), use_global_mask=True)
-            accuracy, co_accuracy = client.test(model=global_model)
+            accuracy = client.test(model=global_model)
             accuracies[client_id] = accuracy.item()
-            co_accuracies[client_id] = co_accuracy.item()
             sparsities[client_id] = client.sparsity()
 
-    return accuracies, co_accuracies, sparsities
-
-def load_model(args):
-
-    if args.dataset in ['mnist']:
-        wh_size = 16
-    elif args.dataset in ['emnist']:
-        wh_size = 7
-    elif args.dataset in ['cifar10', 'cifar100']:
-        wh_size = 20
-    else:
-        raise ValueError("Unsupported dataset type")
-
-    if args.dataset == 'mnist':
-        model = models.MNISTNet(in_channels=1, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
-    elif args.dataset == 'emnist':
-        model = models.Conv2(in_channels=1, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
-    elif args.dataset == 'cifar10':
-        model = models.CIFAR10Net(in_channels=3, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
-    elif args.dataset == 'cifar100':
-        model = models.CIFAR100Net(in_channels=3, num_classes=args.num_ways, hidden_size=args.hidden_size, wh_size=wh_size)
-    else:
-        raise ValueError("Unsupported dataset type")
-
-    colearner_model = models.CoLearner(
-        in_channels=args.hidden_size[1],  # Correctly pass the second element as in_channels
-        out_features=args.num_ways,
-        hidden_size=args.hidden_size,
-        wh_size=wh_size
-    )
-
-    return model, colearner_model
-
+    return accuracies, sparsities
 
 
 # Fetch and cache the dataset
@@ -187,7 +151,7 @@ loaders = get_dataset(args.dataset, clients=args.total_clients, mode=args.distri
 
 class Client:
 
-    def __init__(self, id, device, train_data, test_data,
+    def __init__(self, id, device, train_data, test_data, net=models.MNISTNet,
                  local_epochs=10, learning_rate=0.01, target_sparsity=0.1):
         '''Construct a new client.
 
@@ -212,19 +176,17 @@ class Client:
 
         self.device = device
         
-        self.net, self.co_learner_net = load_model(args) 
-        self.net = self.net.to(self.device)
-        self.co_learner_net = self.co_learner_net.to(self.device)
+        self.net = net(device=self.device).to(self.device)
+        self.co_net = net(device=self.device).to(self.device)
 
         initialize_mask(self.net)
-        initialize_mask(self.co_learner_net)
+        initialize_mask(self.co_net)
         self.criterion = nn.CrossEntropyLoss()
 
         self.learning_rate = learning_rate
         self.reset_optimizer()
 
         self.local_epochs = local_epochs
-        self.curr_epoch = 0
 
         # save the initial global params given to us by the server
         # for LTH pruning later.
@@ -233,10 +195,13 @@ class Client:
 
     def reset_optimizer(self):
         self.optimizer = torch.optim.SGD(self.net.parameters(), lr=self.learning_rate, momentum=args.momentum, weight_decay=args.l2)
-        self.co_optimizer = torch.optim.SGD(self.co_learner_net.parameters(), lr=self.learning_rate, momentum=args.momentum, weight_decay=args.l2)
+        self.co_optimizer = torch.optim.SGD(self.co_net.parameters(), lr=self.learning_rate, momentum=args.momentum, weight_decay=args.l2)
 
     def reset_weights(self, *args, **kwargs):
         return self.net.reset_weights(*args, **kwargs)
+
+    def co_reset_weights(self, *args, **kwargs):
+        return self.co_net.reset_weights(*args, **kwargs)
 
     def apply_hard_mask(self):
         return self.net.apply_hard_mask()
@@ -248,22 +213,28 @@ class Client:
     def train_size(self):
         return sum(len(x) for x in self.train_data)
 
+    def merge_models(self):
+        '''Merge self.net and self.co_net by averaging their parameters.'''
+        for param_net, param_co_net in zip(self.net.parameters(), self.co_net.parameters()):
+            param_net.data = (param_net.data + param_co_net.data) / 2
 
     def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
         dl_cost = 0
+        model_merged = False  # 모델이 병합되었는지 여부를 추적
 
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
             # the client's weights every round
             mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True)
-
+            co_mask_changed = self.co_reset_weights(global_state=global_params, use_global_mask=True)
+            
             # Try to reset the optimizer state.
             self.reset_optimizer()
 
-            if mask_changed:
+            if mask_changed or co_mask_changed:
                 dl_cost += self.net.mask_size # need to receive mask
 
             if not self.initial_global_params:
@@ -277,50 +248,67 @@ class Client:
         #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
         for epoch in range(self.local_epochs):
 
-            self.net.train()
-            self.co_learner_net.train()
+            # 특정 에포크에 도달하면 두 모델을 병합
+            if epoch == int(self.local_epochs * pruning_ratio) and not model_merged:
+                self.merge_models()
+                model_merged = True
+                # 두 번째 모델에 대한 옵티마이저는 더 이상 필요하지 않음
+                del self.co_optimizer
 
-            running_loss = 0.
+            # 병합 이후에는 하나의 모델만 훈련
+            if model_merged:
+                self.net.train()
+                for inputs, labels in self.train_data:
+                    inputs, labels = inputs.to(self.device), labels.to(self.device)
+                    self.optimizer.zero_grad()
+                    outputs = self.net(inputs)
+                    loss = self.criterion(outputs, labels)
+                    if args.prox > 0:
+                        loss += args.prox / 2. * self.net.proximal_loss(global_params)
+                    loss.backward()
+                    self.optimizer.step()
+                    self.reset_weights()
+                continue
+
+            # 병합 전에는 두 모델을 병렬로 훈련
+            self.net.train()
+            self.co_net.train()
             for inputs, labels in self.train_data:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
                 self.optimizer.zero_grad()
                 self.co_optimizer.zero_grad()
 
-                features, logit = self.net(inputs)
-                co_logit = self.co_learner_net(features)
+                outputs = self.net(inputs)
+                co_outputs = self.co_net(inputs)
 
-                loss = self.criterion(logit, labels)
-                co_loss = self.criterion(co_logit, labels)
-                
+                loss = self.criterion(outputs, labels)
+                co_loss = self.criterion(co_outputs, labels)
+
                 if args.prox > 0:
                     loss += args.prox / 2. * self.net.proximal_loss(global_params)
-                    co_loss += args.prox / 2. * self.co_learner_net.proximal_loss(global_params)
-                
-                total_loss = loss + args.loss_scaling * co_loss
+                    co_loss += args.prox / 2. * self.co_net.proximal_loss(global_params)
+
+                total_loss = loss + co_loss
                 total_loss.backward()
-                
+
                 self.optimizer.step()
                 self.co_optimizer.step()
 
-                self.reset_weights() # applies the mask
-                
-                running_loss += loss.item()
+                # 마스크 적용
+                self.reset_weights()
+                self.co_reset_weights()
 
-            if (self.curr_epoch - args.pruning_begin) % args.pruning_interval == 0 and readjust:
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-                # recompute gradient if we used FedProx penalty
-                self.optimizer.zero_grad()
-                _, logit = self.net(inputs)
-                self.criterion(logit, labels).backward()
+        prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
+        # recompute gradient if we used FedProx penalty
+        self.optimizer.zero_grad()
 
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                
-                ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
-                
-            self.curr_epoch += 1
-            
+        outputs = self.net(inputs)
+
+        self.criterion(outputs, labels).backward()
+
+        self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+        self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
@@ -333,14 +321,13 @@ class Client:
         # dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
         return ret
 
-    def test(self, model=None, co_model=None, n_batches=0):
+    def test(self, model=None, n_batches=0):
         '''Evaluate the local model on the local test set.
 
         model - model to evaluate, or this client's model if None
         n_batches - number of minibatches to test on, or 0 for all of them
         '''
         correct = 0.
-        co_correct = 0.
         total = 0.
 
         if model is None:
@@ -349,14 +336,7 @@ class Client:
         else:
             _model = model.to(self.device)
 
-        if co_model is None:
-            co_model = self.co_learner_net
-            _co_model = self.co_learner_net
-        else:
-            _co_model = co_model.to(self.device)
-
         _model.eval()
-        _co_model.eval()
         with torch.no_grad():
             for i, (inputs, labels) in enumerate(self.test_data):
                 if i > n_batches and n_batches > 0:
@@ -365,47 +345,38 @@ class Client:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
 
-                feature, logit = _model(inputs)
-                co_logit = _co_model(feature)
-
-                outputs = torch.argmax(logit, dim=-1)
-                co_outputs = torch.argmax(co_logit, dim=-1)
-
+                outputs = self.net(inputs)
+                outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
-                co_correct += sum(labels == co_outputs)
-
                 total += len(labels)
 
         # remove copies if needed
         if model is not _model:
             del _model
-        if co_model is not _co_model:
-            del _co_model
 
-        return correct / total,  co_correct / total
+        return correct / total
 
 
 # initialize clients
 dprint('Initializing clients...')
+
 clients = {}
 client_ids = []
 
 accuracy_history = []
-co_accuracy_history = []
 download_cost_history = []
 upload_cost_history = []
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, local_epochs=args.epochs,
-                learning_rate=args.eta, target_sparsity=args.sparsity)
+                learning_rate=args.eta, target_sparsity=args.sparsity, net=all_models[args.dataset])
 
     clients[client_id] = cl
     client_ids.append(client_id)
     torch.cuda.empty_cache()
 
 # initialize global model
-global_model, _ = load_model(args)
-global_model = global_model.to('cpu')
+global_model = all_models[args.dataset](device='cpu')
 initialize_mask(global_model)
 
 global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
@@ -571,11 +542,10 @@ for server_round in tqdm(range(args.rounds)):
     # evaluate performance
     torch.cuda.empty_cache()
     if server_round % args.eval_every == 0 and args.eval and server_round > 0:
-        accuracies, co_accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
+        accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
         accuracy_history.append(np.mean(list(accuracies.values())))
-        co_accuracy_history.append(np.mean(list(co_accuracies.values())))
         download_cost_history.append(sum(download_cost))
         upload_cost_history.append(sum(upload_cost))
 
@@ -598,7 +568,6 @@ for server_round in tqdm(range(args.rounds)):
                            lth=False,
                            client_id=client_id,
                            accuracy=accuracies[client_id],
-                           co_accuracy=co_accuracies[client_id],
                            sparsity=sparsities[client_id],
                            compute_time=compute_times[i],
                            download_cost=download_cost[i],
@@ -628,10 +597,8 @@ print2(f'{args.rounds} rounds of federated learning')
 print2()
 
 accuracies = list(accuracies.values())
-co_accuracies = list(co_accuracies.values())
 sparsities = list(sparsities.values())
 print2(f'ACCURACY: mean={np.mean(accuracies)}, std={np.std(accuracies)}, min={np.min(accuracies)}, max={np.max(accuracies)}')
-print2(f'CO_ACCURACY: mean={np.mean(co_accuracies)}, std={np.std(co_accuracies)}, min={np.min(co_accuracies)}, max={np.max(co_accuracies)}')
 print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np.min(sparsities)}, max={np.max(sparsities)}')
 print2()
 print2()
@@ -646,7 +613,6 @@ with open(filename, mode='w', newline='') as file:
     for i in range(1, len(accuracy_history)):
         round_num = i * args.eval_every
         accuracy = accuracy_history[i] * 100  # 퍼센트로 변환
-        co_accuracy = co_accuracy_history[i] * 100
         download_cost = download_cost_history[i]
         upload_cost = upload_cost_history[i]
         
