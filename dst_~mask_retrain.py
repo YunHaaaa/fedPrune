@@ -43,7 +43,7 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
-parser.add_argument('--pruning-begin', type=int, default=2, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-begin', type=int, default=6, help='first epoch number when we should readjust')
 parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
@@ -189,7 +189,6 @@ class Client:
         self.reset_optimizer()
 
         self.local_epochs = local_epochs
-        self.curr_epoch = 0
 
         # save the initial global params given to us by the server
         # for LTH pruning later.
@@ -212,7 +211,7 @@ class Client:
         return sum(len(x) for x in self.train_data)
 
     def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio,
-            readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
+            readjustment_ratio=args.readjustment_ratio, sparsity=args.sparsity, last=None, server_round=None):
         '''Train the client network for a single round.'''
         ul_cost = 0
         dl_cost = 0
@@ -238,17 +237,18 @@ class Client:
 
             self.net.train()
             running_loss = 0.
-            
+
             for inputs, labels in self.train_data:
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
 
-                if epoch > args.pruning_begin and readjust:
-                    outputs = self.net(inputs, 4)
-                else:
+                # 서버 라운드에서 pruning_begin을 기준으로 7번은 type_value, 3번은 4를 사용
+                if (server_round - 1) % args.rounds_between_readjustments < args.pruning_begin:
                     outputs = self.net(inputs, args.type_value)
-                    
+                else:
+                    outputs = self.net(inputs, 4)
+
                 loss = self.criterion(outputs, labels)
 
                 if args.prox > 0:
@@ -257,25 +257,26 @@ class Client:
                 loss.backward()
                 self.optimizer.step()
 
-                if epoch > args.pruning_begin and readjust:
+                # 서버 라운드에서 pruning_begin 기준으로 readjust 여부 확인 후 가중치 초기화
+                if (server_round - 1) % args.rounds_between_readjustments >= args.pruning_begin:
                     self.reset_weights()  # applies the mask
 
                 running_loss += loss.item()
 
-            if epoch == args.pruning_begin and readjust:
-                # Adjust sparsity for pruning
-                prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
+        # 서버 라운드에서 pruning_begin 기준으로 pruning 및 grow 적용
+        if (server_round - 1) % args.rounds_between_readjustments == args.pruning_begin -1:
+            # Adjust sparsity for pruning
+            prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
 
-                # Recompute gradient if FedProx penalty was used
-                self.optimizer.zero_grad()
-                outputs = self.net(inputs, 4)
-                self.criterion(outputs, labels).backward()
+            # Recompute gradient if FedProx penalty was used
+            self.optimizer.zero_grad()
+            outputs = self.net(inputs, 4)
+            self.criterion(outputs, labels).backward()
 
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                ul_cost += (1 - self.net.sparsity()) * self.net.mask_size  # need to transmit mask
-                
-            self.curr_epoch += 1
+            self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+            self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+            ul_cost += (1 - self.net.sparsity()) * self.net.mask_size  # need to transmit mask
+
 
         # Transmit the masked weights and all biases
         if args.fp16:
@@ -412,7 +413,7 @@ for server_round in tqdm(range(args.rounds)):
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
                                     readjustment_ratio=readjustment_ratio,
-                                    readjust=readjust, sparsity=round_sparsity)
+                                    sparsity=round_sparsity, server_round=server_round)
         
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
