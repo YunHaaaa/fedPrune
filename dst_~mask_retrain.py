@@ -43,7 +43,7 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
-parser.add_argument('--pruning-begin', type=int, default=6, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-begin', type=int, default=2, help='first epoch number when we should readjust')
 parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
@@ -211,48 +211,44 @@ class Client:
     def train_size(self):
         return sum(len(x) for x in self.train_data)
 
-
     def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio,
-              readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
+            readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
         '''Train the client network for a single round.'''
         ul_cost = 0
         dl_cost = 0
 
         if global_params:
-            # this is a FedAvg-like algorithm, where we need to reset
-            # the client's weights every round
+            # FedAvg-like algorithm, reset the client's weights every round
             mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True, pruning_type=args.pruning_type)
 
-            # Try to reset the optimizer state.
+            # Reset the optimizer state
             self.reset_optimizer()
 
             if mask_changed:
-                dl_cost += self.net.mask_size # need to receive mask
+                dl_cost += self.net.mask_size  # need to receive mask
 
             if not self.initial_global_params:
                 self.initial_global_params = initial_global_params
-                # no DL cost here: we assume that these are transmitted as a random seed
+                # No DL cost here: assumed to be transmitted as a random seed
             else:
-                # otherwise, there is a DL cost: we need to receive all parameters masked '1' and
-                # all parameters that don't have a mask (e.g. biases in this case)
-                dl_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+                # Otherwise, DL cost for receiving all parameters masked '1' and unmasked parameters (e.g., biases)
+                dl_cost += (1 - self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
-        #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
         for epoch in range(self.local_epochs):
 
             self.net.train()
-
             running_loss = 0.
+            
             for inputs, labels in self.train_data:
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
-                
-                if epoch > args.pruning_begin:
+
+                if epoch > args.pruning_begin and readjust:
                     outputs = self.net(inputs, 4)
-                # TODO: type value 3, over 5
                 else:
-                    outputs = self.net(inputs, 4)
+                    outputs = self.net(inputs, args.type_value)
+                    
                 loss = self.criterion(outputs, labels)
 
                 if args.prox > 0:
@@ -261,37 +257,33 @@ class Client:
                 loss.backward()
                 self.optimizer.step()
 
-                if epoch > args.pruning_begin:
-                    self.reset_weights() # applies the mask
+                if epoch > args.pruning_begin and readjust:
+                    self.reset_weights()  # applies the mask
 
                 running_loss += loss.item()
-            
-            if epoch == args.pruning_begin:
-                # TODO: change args.readjustment_ratio to readjustment_ratio
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-                # recompute gradient if we used FedProx penalty
+
+            if epoch == args.pruning_begin and readjust:
+                # Adjust sparsity for pruning
+                prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
+
+                # Recompute gradient if FedProx penalty was used
                 self.optimizer.zero_grad()
                 outputs = self.net(inputs, 4)
                 self.criterion(outputs, labels).backward()
 
                 self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
-                # print(self.net.sparsity())
                 self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                # print(prune_sparsity, sparsity, self.net.sparsity())
-                ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
+                ul_cost += (1 - self.net.sparsity()) * self.net.mask_size  # need to transmit mask
                 
             self.curr_epoch += 1
-            
-        # we only need to transmit the masked weights and all biases
-        if args.fp16:
-            ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
-        else:
-            ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
-        
-        ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
 
-        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
-        #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        # Transmit the masked weights and all biases
+        if args.fp16:
+            ul_cost += (1 - self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
+        else:
+            ul_cost += (1 - self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+
+        ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
         
         return ret
 
