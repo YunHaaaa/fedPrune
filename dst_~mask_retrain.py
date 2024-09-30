@@ -247,7 +247,7 @@ class Client:
                 if (server_round - 1) % args.rounds_between_readjustments < args.pruning_begin:
                     outputs = self.net(inputs, args.type_value)
                 else:
-                    outputs = self.net(inputs, 4)
+                    outputs = self.net(inputs, 2)
 
                 loss = self.criterion(outputs, labels)
 
@@ -270,7 +270,7 @@ class Client:
 
             # Recompute gradient if FedProx penalty was used
             self.optimizer.zero_grad()
-            outputs = self.net(inputs, 4)
+            outputs = self.net(inputs, 2)
             self.criterion(outputs, labels).backward()
 
             self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
@@ -311,7 +311,7 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                outputs = _model(inputs, 4)
+                outputs = _model(inputs, 2)
                 outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
                 total += len(labels)
