@@ -332,6 +332,10 @@ accuracy_history = []
 download_cost_history = []
 upload_cost_history = []
 
+# best model 저장을 위한 변수 초기화
+best_accuracy = -1  # 초기값은 최소로 설정
+best_model = None
+
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, net=all_models[args.dataset],
@@ -545,10 +549,18 @@ for server_round in tqdm(range(args.rounds)):
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
-        accuracy_history.append(np.mean(list(accuracies.values())))
+        mean_accuracy = np.mean(list(accuracies.values()))
+        accuracy_history.append(mean_accuracy)
         download_cost_history.append(sum(download_cost))
         upload_cost_history.append(sum(upload_cost))
         
+        # 현재 라운드의 accuracy가 최고 기록일 경우 best model 갱신
+        if mean_accuracy > best_accuracy:
+            best_accuracy = mean_accuracy
+            best_model = copy.deepcopy(global_model.state_dict())  # 모델 가중치 저장
+            
+            print2(f"New best model found at round {server_round} with accuracy: {best_accuracy:.4f}")
+
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:
@@ -584,6 +596,12 @@ for server_round in tqdm(range(args.rounds)):
         compute_times[:] = 0
         download_cost[:] = 0
         upload_cost[:] = 0
+
+if best_model is not None:
+    torch.save(best_model, 'best_model.pth')
+    print2(f"Best model saved with accuracy: {best_accuracy:.4f}")
+else:
+    print2("No best model found.")
 
 print2('OVERALL SUMMARY')
 print2()
