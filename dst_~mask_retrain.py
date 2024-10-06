@@ -189,7 +189,6 @@ class Client:
         self.reset_optimizer()
 
         self.local_epochs = local_epochs
-        self.curr_epoch = 0
 
         # save the initial global params given to us by the server
         # for LTH pruning later.
@@ -211,48 +210,48 @@ class Client:
     def train_size(self):
         return sum(len(x) for x in self.train_data)
 
-
     def train(self, global_params=None, initial_global_params=None, pruning_ratio=args.pruning_ratio,
-              readjustment_ratio=args.readjustment_ratio, readjust=False, sparsity=args.sparsity, last=None):
+            readjustment_ratio=args.readjustment_ratio, sparsity=args.sparsity, last=None, server_round=None):
         '''Train the client network for a single round.'''
         ul_cost = 0
         dl_cost = 0
 
         if global_params:
-            # this is a FedAvg-like algorithm, where we need to reset
-            # the client's weights every round
+            # FedAvg-like algorithm, reset the client's weights every round
             mask_changed = self.reset_weights(global_state=global_params, use_global_mask=True, pruning_type=args.pruning_type)
 
-            # Try to reset the optimizer state.
+            # Reset the optimizer state
             self.reset_optimizer()
 
             if mask_changed:
-                dl_cost += self.net.mask_size # need to receive mask
+                dl_cost += self.net.mask_size  # need to receive mask
 
             if not self.initial_global_params:
                 self.initial_global_params = initial_global_params
-                # no DL cost here: we assume that these are transmitted as a random seed
+                # No DL cost here: assumed to be transmitted as a random seed
             else:
-                # otherwise, there is a DL cost: we need to receive all parameters masked '1' and
-                # all parameters that don't have a mask (e.g. biases in this case)
-                dl_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
+                # Otherwise, DL cost for receiving all parameters masked '1' and unmasked parameters (e.g., biases)
+                dl_cost += (1 - self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
-        #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
+        print("client get sparsity")
+        print(self.net.sparsity())
+
         for epoch in range(self.local_epochs):
 
             self.net.train()
-
             running_loss = 0.
+
             for inputs, labels in self.train_data:
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
-                
-                if epoch > args.pruning_begin:
-                    outputs = self.net(inputs, 4)
-                # TODO: type value 3, over 5
+
+                # 서버 라운드에서 pruning_begin을 기준으로 7번은 type_value, 3번은 4를 사용
+                if (server_round - 1) % args.rounds_between_readjustments < args.pruning_begin:
+                    outputs = self.net(inputs, args.type_value)
                 else:
-                    outputs = self.net(inputs, 4)
+                    outputs = self.net(inputs, 2)
+
                 loss = self.criterion(outputs, labels)
 
                 if args.prox > 0:
@@ -261,37 +260,36 @@ class Client:
                 loss.backward()
                 self.optimizer.step()
 
-                if epoch > args.pruning_begin:
-                    self.reset_weights() # applies the mask
+                # 서버 라운드에서 pruning_begin 기준으로 readjust 여부 확인 후 가중치 초기화
+                if (server_round - 1) % args.rounds_between_readjustments >= args.pruning_begin:
+                    self.reset_weights()  # applies the mask
 
                 running_loss += loss.item()
-            
-            if epoch == args.pruning_begin:
-                # TODO: change args.readjustment_ratio to readjustment_ratio
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-                # recompute gradient if we used FedProx penalty
-                self.optimizer.zero_grad()
-                outputs = self.net(inputs, 4)
-                self.criterion(outputs, labels).backward()
 
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
-                # print(self.net.sparsity())
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                # print(prune_sparsity, sparsity, self.net.sparsity())
-                ul_cost += (1-self.net.sparsity()) * self.net.mask_size # need to transmit mask
-                
-            self.curr_epoch += 1
-            
-        # we only need to transmit the masked weights and all biases
+        # 서버 라운드에서 pruning_begin 기준으로 pruning 및 grow 적용
+        if (server_round - 1) % args.rounds_between_readjustments == args.pruning_begin -1:
+            # Adjust sparsity for pruning
+            prune_sparsity = sparsity + (1 - sparsity) * readjustment_ratio
+
+            # Recompute gradient if FedProx penalty was used
+            self.optimizer.zero_grad()
+            outputs = self.net(inputs, 2)
+            self.criterion(outputs, labels).backward()
+
+            self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution)
+            self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+            ul_cost += (1 - self.net.sparsity()) * self.net.mask_size  # need to transmit mask
+
+        print("client send sparsity")
+        print(self.net.sparsity())
+
+        # Transmit the masked weights and all biases
         if args.fp16:
-            ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
+            ul_cost += (1 - self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
         else:
-            ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
-        
-        ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
+            ul_cost += (1 - self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
-        #dprint(global_params['conv1.weight_mask'][0, 0, 0], '->', self.net.state_dict()['conv1.weight_mask'][0, 0, 0])
-        #dprint(global_params['conv1.weight'][0, 0, 0], '->', self.net.state_dict()['conv1.weight'][0, 0, 0])
+        ret = dict(state=self.net.state_dict(), dl_cost=dl_cost, ul_cost=ul_cost)
         
         return ret
 
@@ -318,7 +316,7 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-                outputs = _model(inputs, 4)
+                outputs = _model(inputs, 2)
                 outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
                 total += len(labels)
@@ -338,6 +336,10 @@ client_ids = []
 accuracy_history = []
 download_cost_history = []
 upload_cost_history = []
+
+# best model 저장을 위한 변수 초기화
+best_accuracy = -1  # 초기값은 최소로 설정
+best_model = None
 
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
@@ -420,7 +422,7 @@ for server_round in tqdm(range(args.rounds)):
         # actually perform training
         train_result = client.train(global_params=global_params, initial_global_params=initial_global_params,
                                     readjustment_ratio=readjustment_ratio,
-                                    readjust=readjust, sparsity=round_sparsity)
+                                    sparsity=round_sparsity, server_round=server_round)
         
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
@@ -534,6 +536,9 @@ for server_round in tqdm(range(args.rounds)):
         elif args.pruning_method == 'prune_grow':
             global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
+    print("global sparsity")
+    print(global_model.sparsity())
+
     # discard old weights and apply new mask
     global_params = global_model.state_dict()
     for name, mask in aggregated_masks.items():
@@ -552,10 +557,18 @@ for server_round in tqdm(range(args.rounds)):
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
 
-        accuracy_history.append(np.mean(list(accuracies.values())))
+        mean_accuracy = np.mean(list(accuracies.values()))
+        accuracy_history.append(mean_accuracy)
         download_cost_history.append(sum(download_cost))
         upload_cost_history.append(sum(upload_cost))
         
+        # 현재 라운드의 accuracy가 최고 기록일 경우 best model 갱신
+        if mean_accuracy > best_accuracy:
+            best_accuracy = mean_accuracy
+            best_model = copy.deepcopy(global_model.state_dict())  # 모델 가중치 저장
+            
+            print2(f"New best model found at round {server_round} with accuracy: {best_accuracy:.4f}")
+
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:
@@ -591,6 +604,12 @@ for server_round in tqdm(range(args.rounds)):
         compute_times[:] = 0
         download_cost[:] = 0
         upload_cost[:] = 0
+
+if best_model is not None:
+    torch.save(best_model, 'best_model.pth')
+    print2(f"Best model saved with accuracy: {best_accuracy:.4f}")
+else:
+    print2("No best model found.")
 
 print2('OVERALL SUMMARY')
 print2()

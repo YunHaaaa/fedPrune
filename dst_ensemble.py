@@ -151,7 +151,7 @@ loaders = get_dataset(args.dataset, clients=args.total_clients, mode=args.distri
 
 class Client:
 
-    def __init__(self, id, device, train_data, test_data, net=models.MNISTNet,
+    def __init__(self, id, device, train_data, test_data, net=models.MNISTNet, co_net=models.MNISTNet,
                  local_epochs=10, learning_rate=0.01, target_sparsity=0.1):
         '''Construct a new client.
 
@@ -177,7 +177,7 @@ class Client:
         self.device = device
         
         self.net = net(device=self.device).to(self.device)
-        self.co_net = net(device=self.device).to(self.device)
+        self.co_net = co_net(device=self.device).to(self.device)
 
         initialize_mask(self.net)
         initialize_mask(self.co_net)
@@ -214,16 +214,76 @@ class Client:
         return sum(len(x) for x in self.train_data)
 
     def merge_models(self):
-        '''Merge self.net and self.co_net by averaging their parameters.'''
-        for param_net, param_co_net in zip(self.net.parameters(), self.co_net.parameters()):
-            param_net.data = (param_net.data + param_co_net.data) / 2
 
-    def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio):
+        '''self.net과 self.co_net의 파라미터와 마스크를 서버 집계 로직과 유사하게 병합합니다.'''
+        import torch.nn.functional as F
+
+        # 집계할 파라미터와 마스크 초기화
+        aggregated_params = {}
+        aggregated_masks = {}
+        aggregated_params_for_mask = {}
+
+        # 두 모델의 파라미터와 마스크를 수집하여 집계
+        for model in [self.net, self.co_net]:
+            state_dict = model.state_dict()
+            for name, param in state_dict.items():
+                if name.endswith('_mask'):
+                    base_name = name[:-5]
+                    if base_name not in aggregated_masks:
+                        aggregated_masks[base_name] = torch.zeros_like(param, dtype=torch.float)
+                    aggregated_masks[base_name] += param.float()
+                else:
+                    if name not in aggregated_params:
+                        aggregated_params[name] = torch.zeros_like(param, dtype=torch.float)
+                    aggregated_params[name] += param.float()
+
+        # 집계된 파라미터와 마스크를 평균화
+        for name in aggregated_params:
+            if name in aggregated_masks:
+                # 마스크가 있는 경우
+                # 마스크가 1인 곳만 파라미터를 합산
+                aggregated_params[name] = aggregated_params[name]  # 이미 마스크가 적용된 상태로 합산됨
+                aggregated_masks[name] = aggregated_masks[name]  # 마스크 합계
+
+                # 최소 투표 수 설정 (예: 두 모델 모두에서 마스크가 1인 경우만 유지)
+                # 서버 집계 로직에서 args.min_votes를 사용했으나, 클라이언트는 두 모델이므로 min_votes=2로 설정
+                min_votes = 2
+                aggregated_masks[name] = F.threshold(aggregated_masks[name], min_votes, 0)
+                aggregated_masks[name] = (aggregated_masks[name] >= min_votes).float()
+
+                # 마스크를 기준으로 파라미터를 평균화
+                # 마스크가 1인 곳만 평균을 계산하고, 0인 곳은 0으로 설정
+                valid_mask = aggregated_masks[name] > 0
+                aggregated_params[name][valid_mask] /= aggregated_masks[name][valid_mask]
+                aggregated_params[name][~valid_mask] = 0  # 마스크가 0인 곳은 0으로 설정
+
+                # NaN 방지
+                aggregated_params[name] = torch.nan_to_num(aggregated_params[name],
+                                                        nan=0.0, posinf=0.0, neginf=0.0)
+                aggregated_masks[name] = torch.nan_to_num(aggregated_masks[name],
+                                                        nan=0.0, posinf=0.0, neginf=0.0)
+
+                # 마스크는 bool 타입으로 변환
+                aggregated_masks[name] = aggregated_masks[name].bool()
+            else:
+                # 마스크가 없는 경우 (예: 바이어스)
+                aggregated_params[name] /= 2  # 두 모델의 평균
+
+        # 마스크도 파라미터로 추가
+        for name, mask in aggregated_masks.items():
+            aggregated_params[name + '_mask'] = mask
+
+        # 집계된 파라미터를 글로벌 모델에 로드
+        self.net.load_state_dict(aggregated_params, strict=False)
+
+
+    def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio, server_round=None):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
         dl_cost = 0
         model_merged = False  # 모델이 병합되었는지 여부를 추적
+        pruning_done = False  # 모델 병합 직전에 pruning이 한 번만 적용되었는지 추적
 
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
@@ -245,17 +305,29 @@ class Client:
                 # all parameters that don't have a mask (e.g. biases in this case)
                 dl_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
-        #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
         for epoch in range(self.local_epochs):
 
-            # 특정 에포크에 도달하면 두 모델을 병합
-            if epoch == int(self.local_epochs * pruning_ratio) and not model_merged:
+            # 병합 여부를 서버 라운드 기준으로 결정 (7라운드 동안 각각 훈련, 이후 병합)
+            if (server_round - 1) % args.rounds_between_readjustments >= args.pruning_begin and not model_merged:
+                
+                # 병합 직전에 한 번만 pruning 적용 (net과 co_net 모두)
+                if not pruning_done:
+                    prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
+
+                    self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+                    self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+
+                    self.co_net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+                    self.co_net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+
+                    pruning_done = True  # pruning이 완료되었음을 기록
+
                 self.merge_models()
                 model_merged = True
-                # 두 번째 모델에 대한 옵티마이저는 더 이상 필요하지 않음
+                # 병합된 후에는 co_net의 옵티마이저가 더 이상 필요하지 않음
                 del self.co_optimizer
 
-            # 병합 이후에는 하나의 모델만 훈련
+            # 병합된 후에는 하나의 모델만 훈련
             if model_merged:
                 self.net.train()
                 for inputs, labels in self.train_data:
@@ -298,17 +370,6 @@ class Client:
                 self.reset_weights()
                 self.co_reset_weights()
 
-        prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-        # recompute gradient if we used FedProx penalty
-        self.optimizer.zero_grad()
-
-        outputs = self.net(inputs)
-
-        self.criterion(outputs, labels).backward()
-
-        self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-        self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
@@ -344,8 +405,7 @@ class Client:
                 if not args.cache_test_set_gpu:
                     inputs = inputs.to(self.device)
                     labels = labels.to(self.device)
-
-                outputs = self.net(inputs)
+                outputs = _model(inputs)
                 outputs = torch.argmax(outputs, dim=-1)
                 correct += sum(labels == outputs)
                 total += len(labels)
@@ -369,7 +429,7 @@ upload_cost_history = []
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, local_epochs=args.epochs,
-                learning_rate=args.eta, target_sparsity=args.sparsity, net=all_models[args.dataset])
+                learning_rate=args.eta, target_sparsity=args.sparsity, net=all_models[args.dataset], co_net=all_models[args.dataset])
 
     clients[client_id] = cl
     client_ids.append(client_id)
