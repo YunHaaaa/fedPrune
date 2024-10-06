@@ -3,15 +3,15 @@ import torch.cuda
 from torch import nn
 from torch.nn import functional as F
 import argparse
-import gc
-import itertools
 import numpy as np
 import os
 import sys
 import time
 from copy import deepcopy
+import csv
 
 from tqdm import tqdm
+
 from datasets import get_dataset
 import models
 from models import all_models, needs_mask, initialize_mask
@@ -48,6 +48,7 @@ parser.add_argument('--rounds-between-readjustments', type=int, default=10, help
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
 parser.add_argument('--sparsity-distribution', default='erk', choices=('uniform', 'er', 'erk'))
 parser.add_argument('--final-sparsity', type=float, default=None, help='final sparsity to grow to, from 0 to 1. default is the same as --sparsity')
+parser.add_argument('--pruning-type', type=str, default='hard', choices=['hard', 'soft'], help='Pruning type: hard or soft pruning')
 
 parser.add_argument('--batch-size', type=int, default=32,
                     help='local client batch size')
@@ -63,7 +64,7 @@ parser.add_argument('--no-eval', default=True, action='store_false', dest='eval'
 parser.add_argument('--fp16', default=False, action='store_true', help='upload as fp16')
 parser.add_argument('-o', '--outfile', default='output.log', type=argparse.FileType('a', encoding='ascii'))
 parser.add_argument('--seed', default=42, type=int, help='random seed')
-
+parser.add_argument('--loss-scaling', type=float, default=1.0, help='Loss scaling factor for Co-learner (default: 1.0).')
 
 args = parser.parse_args()
 devices = [torch.device(x) for x in args.device]
@@ -79,7 +80,7 @@ if args.final_sparsity is None:
 def print2(*arg, **kwargs):
     print(*arg, **kwargs, file=args.outfile)
     print(*arg, **kwargs)
-    
+
 def dprint(*args, **kwargs):
     print(*args, **kwargs, file=sys.stderr)
 
@@ -323,6 +324,10 @@ dprint('Initializing clients...')
 clients = {}
 client_ids = []
 
+accuracy_history = []
+download_cost_history = []
+upload_cost_history = []
+
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, net=all_models[args.dataset],
                 learning_rate=args.eta, local_epochs=args.epochs,
@@ -335,8 +340,7 @@ for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
 global_model = all_models[args.dataset](device='cpu')
 initialize_mask(global_model)
 
-
-global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution)
+global_model.layer_prune(sparsity=args.sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
 initial_global_params = deepcopy(global_model.state_dict())
 
@@ -488,7 +492,7 @@ for server_round in tqdm(range(args.rounds)):
         # we now have denser networks than we started with at the beginning of
         # the round. reprune on the server to get back to the desired sparsity.
         # we use layer-wise magnitude pruning as before.
-        global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution)
+        global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
 
     # discard old weights and apply new mask
     global_params = global_model.state_dict()
@@ -503,6 +507,10 @@ for server_round in tqdm(range(args.rounds)):
     if server_round % args.eval_every == 0 and args.eval:
         accuracies, sparsities = evaluate_global(clients, global_model, progress=True,
                                                  n_batches=args.test_batches)
+
+        accuracy_history.append(np.mean(list(accuracies.values())))
+        download_cost_history.append(sum(download_cost))
+        upload_cost_history.append(sum(upload_cost))
 
     for client_id in clients:
         i = client_ids.index(client_id)
@@ -558,3 +566,21 @@ print2(f'SPARSITY: mean={np.mean(sparsities)}, std={np.std(sparsities)}, min={np
 print2()
 print2()
 
+filename = f"{args.outfile}.csv"
+
+with open(filename, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    
+    writer.writerow(['Round', 'Accuracy (%)', 'Download Cost', 'Upload Cost'])
+    
+    for i in range(1, len(accuracy_history)):
+        round_num = i * args.eval_every
+        accuracy = accuracy_history[i] * 100  # 퍼센트로 변환
+        download_cost = download_cost_history[i]
+        upload_cost = upload_cost_history[i]
+        
+        writer.writerow([round_num, accuracy, download_cost, upload_cost])
+
+print2('Training history saved to', filename)
+
+print2('Training Complete')
