@@ -218,7 +218,7 @@ class Client:
         for param_net, param_co_net in zip(self.net.parameters(), self.co_net.parameters()):
             param_net.data = (param_net.data + param_co_net.data) / 2
 
-    def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio):
+    def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio, server_round=None):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
@@ -248,14 +248,14 @@ class Client:
         #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
         for epoch in range(self.local_epochs):
 
-            # 특정 에포크에 도달하면 두 모델을 병합
-            if epoch == int(self.local_epochs * pruning_ratio) and not model_merged:
+            # 병합 여부를 서버 라운드 기준으로 결정 (7라운드 동안 각각 훈련, 이후 병합)
+            if (server_round - 1) % args.rounds_between_readjustments >= args.pruning_begin and not model_merged:
                 self.merge_models()
                 model_merged = True
-                # 두 번째 모델에 대한 옵티마이저는 더 이상 필요하지 않음
+                # 병합된 후에는 co_net의 옵티마이저가 더 이상 필요하지 않음
                 del self.co_optimizer
 
-            # 병합 이후에는 하나의 모델만 훈련
+            # 병합된 후에는 하나의 모델만 훈련
             if model_merged:
                 self.net.train()
                 for inputs, labels in self.train_data:
