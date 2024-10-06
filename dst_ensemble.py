@@ -214,6 +214,7 @@ class Client:
         return sum(len(x) for x in self.train_data)
 
     def merge_models(self):
+
         '''self.net과 self.co_net의 파라미터와 마스크를 서버 집계 로직과 유사하게 병합합니다.'''
         import torch.nn.functional as F
 
@@ -275,12 +276,14 @@ class Client:
         # 집계된 파라미터를 글로벌 모델에 로드
         self.net.load_state_dict(aggregated_params, strict=False)
 
-    def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio):
+
+    def train(self, global_params=None, initial_global_params=None, sparsity=args.sparsity, pruning_ratio=args.pruning_ratio, server_round=None):
         '''Train the client network for a single round.'''
 
         ul_cost = 0
         dl_cost = 0
         model_merged = False  # 모델이 병합되었는지 여부를 추적
+        pruning_done = False  # 모델 병합 직전에 pruning이 한 번만 적용되었는지 추적
 
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
@@ -302,15 +305,29 @@ class Client:
                 # all parameters that don't have a mask (e.g. biases in this case)
                 dl_cost += (1-self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
-        #pre_training_state = {k: v.clone() for k, v in self.net.state_dict().items()}
         for epoch in range(self.local_epochs):
 
-            # 특정 에포크에 도달하면 두 모델을 병합
-            if epoch == int(self.local_epochs * pruning_ratio) and not model_merged:
+            # 병합 여부를 서버 라운드 기준으로 결정 (7라운드 동안 각각 훈련, 이후 병합)
+            if (server_round - 1) % args.rounds_between_readjustments >= args.pruning_begin and not model_merged:
+                
+                # 병합 직전에 한 번만 pruning 적용 (net과 co_net 모두)
+                if not pruning_done:
+                    prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
+
+                    self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+                    self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+
+                    self.co_net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+                    self.co_net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
+
+                    pruning_done = True  # pruning이 완료되었음을 기록
+
                 self.merge_models()
                 model_merged = True
+                # 병합된 후에는 co_net의 옵티마이저가 더 이상 필요하지 않음
+                del self.co_optimizer
 
-            # 병합 이후에는 하나의 모델만 훈련
+            # 병합된 후에는 하나의 모델만 훈련
             if model_merged:
                 self.net.train()
                 for inputs, labels in self.train_data:
@@ -353,25 +370,6 @@ class Client:
                 self.reset_weights()
                 self.co_reset_weights()
 
-            if epoch == int(self.local_epochs * pruning_ratio) - 1:
-                prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
-                # recompute gradient if we used FedProx penalty
-                self.optimizer.zero_grad()
-                self.co_optimizer.zero_grad()
-
-                outputs = self.net(inputs)
-                co_outputs = self.co_net(inputs)
-                
-                self.criterion(outputs, labels).backward()
-                self.criterion(co_outputs, labels).backward()
-
-                self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-                self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-                
-                self.co_net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
-                self.co_net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
-
-                
         # we only need to transmit the masked weights and all biases
         if args.fp16:
             ul_cost += (1-self.net.sparsity()) * self.net.mask_size * 16 + (self.net.param_size - self.net.mask_size * 16)
