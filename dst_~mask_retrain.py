@@ -233,6 +233,9 @@ class Client:
                 # Otherwise, DL cost for receiving all parameters masked '1' and unmasked parameters (e.g., biases)
                 dl_cost += (1 - self.net.sparsity()) * self.net.mask_size * 32 + (self.net.param_size - self.net.mask_size * 32)
 
+        print("client get sparsity")
+        print(self.net.sparsity())
+
         for epoch in range(self.local_epochs):
 
             self.net.train()
@@ -277,6 +280,8 @@ class Client:
             self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
             ul_cost += (1 - self.net.sparsity()) * self.net.mask_size  # need to transmit mask
 
+        print("client send sparsity")
+        print(self.net.sparsity())
 
         # Transmit the masked weights and all biases
         if args.fp16:
@@ -530,6 +535,9 @@ for server_round in tqdm(range(args.rounds)):
 
         elif args.pruning_method == 'prune_grow':
             global_model.layer_prune(sparsity=round_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
+
+    print("global sparsity")
+    print(global_model.sparsity())
 
     # discard old weights and apply new mask
     global_params = global_model.state_dict()
