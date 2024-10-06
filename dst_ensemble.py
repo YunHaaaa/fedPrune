@@ -45,7 +45,7 @@ parser.add_argument('--sparsity', type=float, default=0.1, help='sparsity from 0
 parser.add_argument('--rate-decay-method', default='cosine', choices=('constant', 'cosine'), help='annealing for readjustment ratio')
 parser.add_argument('--rate-decay-end', default=None, type=int, help='round to end annealing')
 parser.add_argument('--readjustment-ratio', type=float, default=0.5, help='readjust this many of the weights each time')
-parser.add_argument('--pruning-begin', type=int, default=9, help='first epoch number when we should readjust')
+parser.add_argument('--pruning-begin', type=int, default=6, help='first epoch number when we should readjust')
 parser.add_argument('--pruning-interval', type=int, default=10, help='epochs between readjustments')
 parser.add_argument('--rounds-between-readjustments', type=int, default=10, help='rounds between readjustments')
 parser.add_argument('--remember-old', default=False, action='store_true', help="remember client's old weights when aggregating missing ones")
@@ -192,6 +192,10 @@ class Client:
         # for LTH pruning later.
         self.initial_global_params = None
 
+        # Initialize instance variables for merging and pruning
+        self.model_merged = False
+        self.pruning_done = False
+
 
     def reset_optimizer(self):
         self.optimizer = torch.optim.SGD(self.net.parameters(), lr=self.learning_rate, momentum=args.momentum, weight_decay=args.l2)
@@ -247,7 +251,7 @@ class Client:
 
                 # 최소 투표 수 설정 (예: 두 모델 모두에서 마스크가 1인 경우만 유지)
                 # 서버 집계 로직에서 args.min_votes를 사용했으나, 클라이언트는 두 모델이므로 min_votes=2로 설정
-                min_votes = 2
+                min_votes = 1
                 aggregated_masks[name] = F.threshold(aggregated_masks[name], min_votes, 0)
                 aggregated_masks[name] = (aggregated_masks[name] >= min_votes).float()
 
@@ -282,8 +286,11 @@ class Client:
 
         ul_cost = 0
         dl_cost = 0
-        model_merged = False  # 모델이 병합되었는지 여부를 추적
-        pruning_done = False  # 모델 병합 직전에 pruning이 한 번만 적용되었는지 추적
+
+        # 매 10 라운드마다 pruning_done과 model_merged 초기화
+        if (server_round - 1) % args.rounds_between_readjustments == 0:
+            self.pruning_done = False
+            self.model_merged = False
 
         if global_params:
             # this is a FedAvg-like algorithm, where we need to reset
@@ -308,11 +315,24 @@ class Client:
         for epoch in range(self.local_epochs):
 
             # 병합 여부를 서버 라운드 기준으로 결정 (7라운드 동안 각각 훈련, 이후 병합)
-            if (server_round - 1) % args.rounds_between_readjustments >= args.pruning_begin and not model_merged:
+            if (server_round - 1) % args.rounds_between_readjustments >= args.pruning_begin and not self.model_merged:
                 
                 # 병합 직전에 한 번만 pruning 적용 (net과 co_net 모두)
-                if not pruning_done:
+                if not self.pruning_done:
                     prune_sparsity = sparsity + (1 - sparsity) * args.readjustment_ratio
+
+                    for inputs, labels in self.train_data:
+                        inputs = inputs.to(self.device)
+                        labels = labels.to(self.device)
+
+                    self.optimizer.zero_grad()
+                    self.co_optimizer.zero_grad()
+
+                    outputs = self.net(inputs)
+                    self.criterion(outputs, labels).backward()
+                    
+                    co_outputs = self.co_net(inputs)
+                    self.criterion(co_outputs, labels).backward()
 
                     self.net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
                     self.net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
@@ -320,15 +340,16 @@ class Client:
                     self.co_net.layer_prune(sparsity=prune_sparsity, sparsity_distribution=args.sparsity_distribution, pruning_type=args.pruning_type)
                     self.co_net.layer_grow(sparsity=sparsity, sparsity_distribution=args.sparsity_distribution)
 
-                    pruning_done = True  # pruning이 완료되었음을 기록
+                    self.pruning_done = True
 
                 self.merge_models()
-                model_merged = True
+                self.model_merged = True
+                
                 # 병합된 후에는 co_net의 옵티마이저가 더 이상 필요하지 않음
                 del self.co_optimizer
 
             # 병합된 후에는 하나의 모델만 훈련
-            if model_merged:
+            if self.model_merged:
                 self.net.train()
                 for inputs, labels in self.train_data:
                     inputs, labels = inputs.to(self.device), labels.to(self.device)
@@ -494,7 +515,7 @@ for server_round in tqdm(range(args.rounds)):
             round_sparsity = args.final_sparsity
 
         # actually perform training
-        train_result = client.train(global_params=global_params, initial_global_params=initial_global_params)
+        train_result = client.train(global_params=global_params, initial_global_params=initial_global_params, server_round=server_round)
         cl_params = train_result['state']
         download_cost[i] = train_result['dl_cost']
         upload_cost[i] = train_result['ul_cost']
