@@ -252,7 +252,7 @@ class Client:
 
                 # 최소 투표 수 설정 (예: 두 모델 모두에서 마스크가 1인 경우만 유지)
                 # 서버 집계 로직에서 args.min_votes를 사용했으나, 클라이언트는 두 모델이므로 min_votes=2로 설정
-                min_votes = 1
+                min_votes = 0
                 aggregated_masks[name] = F.threshold(aggregated_masks[name], min_votes, 0)
                 aggregated_masks[name] = (aggregated_masks[name] >= min_votes).float()
 
