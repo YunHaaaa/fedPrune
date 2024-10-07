@@ -9,6 +9,7 @@ import sys
 import time
 from copy import deepcopy
 import csv
+import copy
 
 from tqdm import tqdm
 
@@ -341,6 +342,23 @@ upload_cost_history = []
 best_accuracy = -1  # 초기값은 최소로 설정
 best_model = None
 
+cumulative_upload_cost = 0
+threshold_step = 4 * (2 ** 30)  # 4 GiB in bytes
+next_threshold = threshold_step
+thresholds_saved = []  # To keep track of which thresholds have been saved
+
+# 각 임계값에 도달했을 때의 최고 정확도를 저장할 딕셔너리 초기화
+best_accuracy_at_thresholds = {}
+
+threshold_logs_dir = 'threshold_logs'
+os.makedirs(threshold_logs_dir, exist_ok=True)  # 디렉토리 생성
+
+csv_file_path = os.path.join(threshold_logs_dir, f'{args.outfile}.csv')
+
+# CSV 파일 초기화 (처음 한 번만 실행)
+with open(csv_file_path, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(['Upload Cost (GiB)', 'Best Accuracy'])
 
 for i, (client_id, client_loaders) in tqdm(enumerate(loaders.items())):
     cl = Client(client_id, *client_loaders, net=all_models[args.dataset],
@@ -569,6 +587,35 @@ for server_round in tqdm(range(args.rounds)):
             
             print2(f"New best model found at round {server_round} with accuracy: {best_accuracy:.4f}")
 
+        current_upload_cost = upload_cost_history[-1]  # Latest upload cost added
+        cumulative_upload_cost += current_upload_cost
+
+        while cumulative_upload_cost >= next_threshold:
+            threshold_gib = int(next_threshold / (2 ** 30))  # Convert bytes to GiB for naming
+
+            # 현재까지의 최고 정확도를 임계값에 저장
+            best_accuracy_at_thresholds[threshold_gib] = best_accuracy
+            print2(f"Best accuracy up to {threshold_gib} GiB upload cost: {best_accuracy:.4f}")
+
+            # CSV 파일에 기록 (선택 사항)
+            with open(csv_file_path, mode='a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([threshold_gib, best_accuracy])
+
+            thresholds_saved.append(next_threshold)
+
+            # model_filename = f'threshold_models/best_model_{threshold_gib}GiB.pth'
+            
+            # if best_model is not None:
+            #     torch.save(best_model, model_filename)
+            #     print2(f"Best model up to {threshold_gib} GiB upload cost saved with accuracy: {best_accuracy:.4f}")
+            #     thresholds_saved.append(next_threshold)
+            # else:
+            #     print2(f"No best model to save at {threshold_gib} GiB upload cost.")
+            
+            # Prepare for the next threshold
+            next_threshold += threshold_step
+
     for client_id in clients:
         i = client_ids.index(client_id)
         if server_round % args.eval_every == 0 and args.eval:
@@ -610,6 +657,21 @@ if best_model is not None:
     print2(f"Best model saved with accuracy: {best_accuracy:.4f}")
 else:
     print2("No best model found.")
+
+# After the server rounds, you might want to save any remaining best model if it hasn't been saved yet.
+if best_model is not None and cumulative_upload_cost >= next_threshold - threshold_step:
+    threshold_gib = int(cumulative_upload_cost / (2 ** 30))
+    best_accuracy_at_thresholds[threshold_gib] = best_accuracy
+    print2(f"Final best accuracy up to {threshold_gib} GiB upload cost: {best_accuracy:.4f}")
+
+    # CSV 파일에 기록
+    with open(csv_file_path, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow([threshold_gib, best_accuracy])
+
+    # model_filename = f'threshold_models/best_model_{threshold_gib}GiB.pth'
+    # torch.save(best_model, model_filename)
+    # print2(f"Final best model saved at {threshold_gib} GiB upload cost with accuracy: {best_accuracy:.4f}")
 
 print2('OVERALL SUMMARY')
 print2()
